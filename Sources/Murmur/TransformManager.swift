@@ -14,7 +14,7 @@ struct Transform: Identifiable {
         Transform(
             id: "polish",
             name: "Polish",
-            keyLabel: "⌥1",
+            keyLabel: "⌃⌥1",
             keyCode: UInt16(kVK_ANSI_1),
             description: "Fixes grammar, spelling and punctuation and tightens " +
                          "the wording without changing meaning or tone.",
@@ -24,7 +24,7 @@ struct Transform: Identifiable {
         Transform(
             id: "promptEngineer",
             name: "Prompt Engineer",
-            keyLabel: "⌥2",
+            keyLabel: "⌃⌥2",
             keyCode: UInt16(kVK_ANSI_2),
             description: "Turns a rough idea into a clear, well-structured " +
                          "prompt for an AI assistant.",
@@ -35,12 +35,13 @@ struct Transform: Identifiable {
     ]
 }
 
-/// Global ⌥1 / ⌥2 hotkeys that rewrite the currently selected text in place,
+/// Global ⌃⌥1 / ⌃⌥2 hotkeys that rewrite the currently selected text in place,
 /// in any app — like Wispr Flow's Transforms. Uses the on-device model.
 @MainActor
 final class TransformManager {
     private let engine: RewriteEngine
-    private var monitor: Any?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private var isRunning = false
 
     /// Status line for the UI; nil clears it.
@@ -53,23 +54,38 @@ final class TransformManager {
 
     func startMonitoring() {
         stopMonitoring()
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) {
             [weak self] event in
             guard let self else { return }
-            let modifiers = event.modifierFlags.intersection(
-                [.command, .option, .control, .shift])
-            guard modifiers == .option else { return }
-            guard let transform = Transform.all.first(
-                where: { $0.keyCode == event.keyCode }) else { return }
+            guard let transform = self.matchingTransform(for: event) else { return }
             Task { @MainActor in self.run(transform) }
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak self] event in
+            guard let self else { return event }
+            guard let transform = self.matchingTransform(for: event) else { return event }
+            Task { @MainActor in self.run(transform) }
+            return nil
         }
     }
 
     func stopMonitoring() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
         }
-        monitor = nil
+        globalMonitor = nil
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+        }
+        localMonitor = nil
+    }
+
+    /// Returns the transform matching this key event's modifiers and key code, if any.
+    private func matchingTransform(for event: NSEvent) -> Transform? {
+        let modifiers = event.modifierFlags.intersection(
+            [.command, .option, .control, .shift])
+        guard modifiers == [.control, .option] else { return nil }
+        return Transform.all.first(where: { $0.keyCode == event.keyCode })
     }
 
     func run(_ transform: Transform) {
@@ -87,11 +103,15 @@ final class TransformManager {
                 isRunning = false
                 onStatus?(nil)
             }
-            let saved = TextInserter.saveClipboard()
+            // Establishes (or joins) the shared pending restore before
+            // doing anything that could fail — see TextInserter's
+            // RestoreOwner for why this must not snapshot independently
+            // of any concurrent TextInserter.insert(_:) in flight.
+            TextInserter.beginClipboardHold()
             guard let selection = await TextInserter.copySelection(),
                   !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
-                TextInserter.restoreClipboard(saved)
+                TextInserter.restoreHeldClipboard()
                 onError?("Select some text first, then press " +
                          "\(transform.keyLabel).")
                 NSSound(named: "Basso")?.play()
@@ -107,15 +127,13 @@ final class TransformManager {
                         NSLocalizedDescriptionKey: "Model returned empty text",
                     ])
                 }
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(rewritten, forType: .string)
+                let stamp = TextInserter.writeConcealed(rewritten)
                 TextInserter.sendKeystroke(kVK_ANSI_V, flags: .maskCommand)
                 NSSound(named: "Tink")?.play()
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                TextInserter.restoreClipboard(saved)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                TextInserter.attemptRestore(expectedStamp: stamp)
             } catch {
-                TextInserter.restoreClipboard(saved)
+                TextInserter.restoreHeldClipboard()
                 onError?("\(transform.name) failed: \(error.localizedDescription)")
                 NSSound(named: "Basso")?.play()
             }

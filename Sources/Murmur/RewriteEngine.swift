@@ -5,6 +5,15 @@ import FoundationModels
 /// (Apple Intelligence). Powers Style and Transforms — no cloud involved.
 final class RewriteEngine {
 
+    /// Apple's on-device model shares one context window (a few thousand
+    /// tokens) across instructions, input and output. There is no clip
+    /// anywhere upstream — a long hands-free dictation, or a large ⌘A
+    /// selection fed into a Transform, can exceed it and make
+    /// `session.respond(to:)` throw `exceededContextWindowSize`. This limit
+    /// catches that up front with a clear message instead of letting each
+    /// call site fail (or silently swallow the failure) past some length.
+    static let maxInputCharacters = 8000
+
     var isAvailable: Bool {
         SystemLanguageModel.default.availability == .available
     }
@@ -28,6 +37,13 @@ final class RewriteEngine {
     }
 
     func rewrite(_ text: String, instructions: String) async throws -> String {
+        guard text.count <= Self.maxInputCharacters else {
+            throw NSError(domain: "Murmur", code: 20, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "That text is too long to rewrite on-device (\(text.count) " +
+                    "characters, limit \(Self.maxInputCharacters)).",
+            ])
+        }
         let session = LanguageModelSession(
             instructions: instructions +
             "\nOutput ONLY the resulting text — no preamble, no quotes, " +

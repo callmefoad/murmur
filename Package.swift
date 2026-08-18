@@ -5,7 +5,7 @@ let package = Package(
     name: "Murmur",
     platforms: [.macOS(.v26)],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0")
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMinor(from: "1.0.0"))
     ],
     targets: [
         .executableTarget(
@@ -15,6 +15,11 @@ let package = Package(
             ],
             path: "Sources/Murmur",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "MurmurTests",
+            dependencies: ["Murmur"],
+            path: "Tests/MurmurTests"
         )
     ]
 )

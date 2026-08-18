@@ -15,7 +15,33 @@ enum AppPaths {
         }
 
         try? FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true)
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         return directory
+    }
+
+    /// Restricts a support-directory item to the current user.
+    /// Directories get 0700 — without the execute bit they cannot be
+    /// traversed, which would strand anything stored inside them
+    /// (notably the downloaded Whisper models).
+    static func secure(_ url: URL) {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: url.path, isDirectory: &isDirectory)
+        guard exists else { return }
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: isDirectory.boolValue ? 0o700 : 0o600],
+            ofItemAtPath: url.path)
+    }
+
+    /// Tightens the support directory and everything already inside it.
+    /// Runs at launch so files created before this existed are fixed too.
+    static func secureExistingFiles() {
+        let manager = FileManager.default
+        try? manager.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: supportDirectory.path)
+        guard let items = try? manager.contentsOfDirectory(
+            at: supportDirectory, includingPropertiesForKeys: nil) else { return }
+        for item in items { secure(item) }
     }
 }

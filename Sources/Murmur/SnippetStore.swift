@@ -25,25 +25,21 @@ enum SnippetStore {
     static func save(_ snippets: [Snippet]) {
         if let data = try? JSONEncoder().encode(snippets) {
             try? data.write(to: fileURL, options: .atomic)
+            AppPaths.secure(fileURL)
         }
     }
 
     /// Replaces spoken trigger phrases with their expansions.
-    /// Longest triggers win so overlapping phrases behave predictably.
+    /// Case-insensitive whole-phrase match; the expansion keeps its saved
+    /// casing and is inserted literally. One pass over the original text,
+    /// so an expansion can never be rewritten by another snippet: with
+    /// "email" -> "me@example.com" and "com" -> "Company", "email" expands
+    /// to "me@example.com" and stops there.
     static func expand(in text: String) -> String {
-        var result = text
-        let snippets = load()
-            .filter { !$0.trigger.trimmingCharacters(in: .whitespaces).isEmpty }
-            .sorted { $0.trigger.count > $1.trigger.count }
-        for snippet in snippets {
-            let escaped = NSRegularExpression.escapedPattern(
-                for: snippet.trigger.trimmingCharacters(in: .whitespaces))
-            // Case-insensitive whole-phrase match; expansion keeps saved casing.
-            result = result.replacingOccurrences(
-                of: "(?i)\\b\(escaped)\\b",
-                with: NSRegularExpression.escapedTemplate(for: snippet.expansion),
-                options: .regularExpression)
-        }
-        return result
+        let entries = load()
+            .map { (key: $0.trigger.trimmingCharacters(in: .whitespaces),
+                    value: $0.expansion) }
+            .filter { !$0.key.isEmpty }
+        return PhraseReplacer.replace(in: text, using: entries)
     }
 }

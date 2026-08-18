@@ -21,6 +21,9 @@ final class WhisperEngine {
 
     /// Status line for the UI (loading/downloading/transcribing); nil clears.
     var onStatus: ((String?) -> Void)?
+    /// Fired when a model load fails, separate from `onStatus` so the
+    /// `defer { onStatus?(nil) }` in `pipeline(model:)` doesn't clear it.
+    var onError: ((String) -> Void)?
 
     private var loadTask: Task<WhisperKit, Error>?
     private var loadedModel: String?
@@ -82,11 +85,28 @@ final class WhisperEngine {
         }
         loadTask = task
         defer { onStatus?(nil) }
-        let pipe = try await task.value
-        if loadedModel == model {
-            readyModel = model
+        do {
+            let pipe = try await task.value
+            if loadedModel == model {
+                readyModel = model
+            }
+            return pipe
+        } catch {
+            // Evict the failed load so the next attempt actually retries,
+            // instead of rethrowing the same cached error forever.
+            if loadedModel == model {
+                loadTask = nil
+                loadedModel = nil
+            }
+            // Switching models cancels the in-flight load (see `loadTask?.cancel()`
+            // above) — that cancellation surfaces here as an error too, but it
+            // isn't a failure and shouldn't produce a "failed to load" banner
+            // every time the user changes models.
+            if !(error is CancellationError) && !Task.isCancelled {
+                onError?("Whisper model failed to load: \(error.localizedDescription)")
+            }
+            throw error
         }
-        return pipe
     }
 
     func transcribe(

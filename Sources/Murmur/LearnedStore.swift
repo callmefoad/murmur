@@ -36,6 +36,7 @@ enum LearnedStore {
     static func save(_ learned: LearnedData) {
         if let data = try? JSONEncoder().encode(learned) {
             try? data.write(to: fileURL, options: .atomic)
+            AppPaths.secure(fileURL)
         }
     }
 
@@ -98,41 +99,55 @@ enum LearnedStore {
 
     // MARK: - Using the knowledge
 
-    /// Fixes known mishearings (case-insensitive whole phrases,
-    /// longest first so overlapping mappings behave predictably).
+    /// Fixes known mishearings: case-insensitive whole phrases, longest
+    /// first, in a single pass so one correction can never rewrite the
+    /// text another correction just inserted. Terms with non-word edges
+    /// ("see plus plus" -> "C++") match too, which the old `\b`-only
+    /// pattern silently refused to do.
     static func apply(in text: String) -> String {
-        var result = text
-        let corrections = load().corrections
-            .sorted { $0.heard.count > $1.heard.count }
-        for correction in corrections {
-            let escaped = NSRegularExpression.escapedPattern(for: correction.heard)
-            result = result.replacingOccurrences(
-                of: "(?i)\\b\(escaped)\\b",
-                with: NSRegularExpression.escapedTemplate(for: correction.intended),
-                options: .regularExpression)
-        }
-        return result
+        let entries = load().corrections
+            .map { (key: $0.heard, value: $0.intended) }
+        return PhraseReplacer.replace(in: text, using: entries)
     }
 
     /// Vocabulary handed to the speech model before recognition:
     /// taught terms, learned spellings, dictionary spellings, snippet triggers.
     static func biasTerms() -> [String] {
+        let learned = load()
+        // Round-robin across the four sources instead of concatenating them.
+        // Concatenating starved the last three: `learned.terms` is itself
+        // capped at 300, so a user with a full taught vocabulary got zero
+        // biasing for the Dictionary and Snippets the Settings UI promises
+        // are "fed to the model". Dictionary values are sorted because
+        // `Dictionary.values` order varies per process.
+        let sources: [[String]] = [
+            learned.terms,
+            learned.corrections.map(\.intended),
+            TextFormatter.loadDictionary().values.sorted(),
+            SnippetStore.load().map(\.trigger),
+        ]
+        return interleave(sources, limit: 300)
+    }
+
+    /// Takes one item from each source in turn until every source is
+    /// exhausted or `limit` items have been kept. Skips blanks and
+    /// single-character terms, and de-duplicates case-insensitively.
+    static func interleave(_ sources: [[String]], limit: Int) -> [String] {
         var terms: [String] = []
         var seen = Set<String>()
-        func insert(_ term: String) {
-            let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = trimmed.lowercased()
-            guard !trimmed.isEmpty, trimmed.count > 1, !seen.contains(key)
-            else { return }
-            seen.insert(key)
-            terms.append(trimmed)
+        let longest = sources.map(\.count).max() ?? 0
+        for index in 0..<longest {
+            for source in sources where index < source.count {
+                let trimmed = source[index]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = trimmed.lowercased()
+                guard trimmed.count > 1, !seen.contains(key) else { continue }
+                seen.insert(key)
+                terms.append(trimmed)
+                if terms.count >= limit { return terms }
+            }
         }
-        let learned = load()
-        learned.terms.forEach(insert)
-        learned.corrections.map(\.intended).forEach(insert)
-        TextFormatter.loadDictionary().values.forEach(insert)
-        SnippetStore.load().map(\.trigger).forEach(insert)
-        return Array(terms.prefix(300))
+        return terms
     }
 
     // MARK: - Diff extraction
@@ -140,11 +155,22 @@ enum LearnedStore {
     /// Word-level diff between the original transcript and the user's
     /// correction. Returns substituted runs (up to 4 words long) as
     /// heard → intended pairs.
+    /// Word cap per side for `extractCorrections`, bounding the LCS table
+    /// at roughly 32 MB.
+    static let maxDiffTokens = 2000
+
     static func extractCorrections(
         original: String, corrected: String) -> [(heard: String, intended: String)] {
         let originalWords = tokenize(original)
         let correctedWords = tokenize(corrected)
         guard !originalWords.isEmpty, !correctedWords.isEmpty else { return [] }
+        // The LCS table below is O(n*m) *Int*, and this runs synchronously on
+        // the main actor from "Save & Learn". Hands-free dictation reaches
+        // thousands of words, where that table costs hundreds of megabytes
+        // (12,000 words measured at ~1 GB). Long transcripts are not where
+        // per-word pronunciation fixes come from, so bail out instead.
+        guard originalWords.count <= maxDiffTokens,
+              correctedWords.count <= maxDiffTokens else { return [] }
 
         // Longest common subsequence over normalized tokens.
         let n = originalWords.count
@@ -243,6 +269,22 @@ enum LearnedStore {
             print("\(ok ? "PASS" : "FAIL"): diff(\"\(testCase.original)\" → " +
                   "\"\(testCase.corrected)\") = \(got)")
         }
+
+        // A transcript past the token cap must bail out rather than
+        // allocate a huge LCS table on the main actor.
+        let long = Array(repeating: "word", count: maxDiffTokens + 1)
+            .joined(separator: " ")
+        let capped = extractCorrections(original: long, corrected: long + " Søren")
+        if !capped.isEmpty { passed = false }
+        print("\(capped.isEmpty ? "PASS" : "FAIL"): diff over \(maxDiffTokens) " +
+              "tokens returns no pairs")
+
+        // Interleaving must represent every source, not just the first.
+        let mixed = interleave([["a1", "a2", "a3"], ["b1"], [], ["d1", "d2"]], limit: 300)
+        let interleaved = mixed == ["a1", "b1", "d1", "a2", "d2", "a3"]
+        if !interleaved { passed = false }
+        print("\(interleaved ? "PASS" : "FAIL"): interleave = \(mixed)")
+
         return passed
     }
 }

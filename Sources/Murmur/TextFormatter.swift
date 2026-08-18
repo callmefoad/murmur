@@ -27,16 +27,23 @@ struct TextFormatter {
         return dict
     }
 
-    func format(_ raw: String) -> String {
+    func format(_ raw: String, autoPeriod: Bool = Settings.autoPeriod) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return "" }
 
         text = removeFillers(from: text)
         text = applySpokenCommands(to: text)
         text = applyDictionary(to: text)
+        // Dictionary output has to flow through the remaining passes: tidying
+        // fixes the spacing left by punctuation-only values ("period" -> "."),
+        // and capitalization fixes normalization values that land at a
+        // sentence start ("gonna" -> "going to"). Deliberately-cased values
+        // like "iPhone" are protected inside capitalizeSentences itself.
         text = tidyWhitespaceAndPunctuation(in: text)
         text = capitalizeSentences(in: text)
-        text = ensureTerminalPunctuation(in: text)
+        if autoPeriod {
+            text = ensureTerminalPunctuation(in: text)
+        }
         return text
     }
 
@@ -68,14 +75,10 @@ struct TextFormatter {
     }
 
     private func applyDictionary(to text: String) -> String {
-        var result = text
-        for (spoken, replacement) in dictionary {
-            let escaped = NSRegularExpression.escapedPattern(for: spoken)
-            result = result.replacingOccurrences(
-                of: "(?i)\\b\(escaped)\\b", with: replacement,
-                options: .regularExpression)
-        }
-        return result
+        // One pass over the original text: no entry can rewrite what another
+        // entry just inserted, longest spoken form wins deterministically,
+        // and terms with non-word edges (C++, .NET) actually match.
+        PhraseReplacer.replace(in: text, using: dictionary)
     }
 
     private func tidyWhitespaceAndPunctuation(in text: String) -> String {
@@ -107,7 +110,15 @@ struct TextFormatter {
         for index in characters.indices {
             let character = characters[index]
             if capitalizeNext, character.isLetter {
-                characters[index] = Character(character.uppercased())
+                // A token carrying an uppercase letter anywhere after its
+                // first character is deliberately cased -- iPhone, eBay,
+                // iOS, macOS, gRPC -- so leave it exactly as written. This
+                // needs no dictionary knowledge, so it also protects
+                // learned corrections and snippet expansions, which are
+                // applied later in the pipeline.
+                if !Self.isDeliberatelyCasedToken(in: characters, startingAt: index) {
+                    characters[index] = Character(character.uppercased())
+                }
                 capitalizeNext = false
             } else if ".!?\n".contains(character) {
                 capitalizeNext = true
@@ -116,6 +127,21 @@ struct TextFormatter {
             }
         }
         return String(characters)
+    }
+
+    /// Looks ahead at the whole alphanumeric token beginning at `start` and
+    /// reports whether it contains an uppercase letter after its first
+    /// character.
+    private static func isDeliberatelyCasedToken(
+        in characters: [Character], startingAt start: Int) -> Bool {
+        var index = characters.index(after: start)
+        while index < characters.endIndex {
+            let character = characters[index]
+            guard character.isLetter || character.isNumber else { break }
+            if character.isUppercase { return true }
+            index += 1
+        }
+        return false
     }
 
     private func ensureTerminalPunctuation(in text: String) -> String {
@@ -129,7 +155,44 @@ struct TextFormatter {
     // MARK: - Self test
 
     static func runSelfTest() -> Bool {
-        let formatter = TextFormatter(dictionary: ["jira": "Jira", "claude code": "Claude Code"])
+        var passed = true
+
+        func check(_ formatter: TextFormatter, _ input: String, _ expected: String) {
+            let got = formatter.format(input, autoPeriod: true)
+            let ok = got == expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): \"\(input)\" -> \"\(got)\"" +
+                  (ok ? "" : " (expected \"\(expected)\")"))
+        }
+
+        func checkReplacer(
+            _ entries: [(key: String, value: String)],
+            _ input: String, _ expected: String) {
+            let got = PhraseReplacer.replace(in: input, using: entries)
+            let ok = got == expected
+            if !ok { passed = false }
+            print("\(ok ? "PASS" : "FAIL"): replace(\"\(input)\") -> \"\(got)\"" +
+                  (ok ? "" : " (expected \"\(expected)\")"))
+        }
+
+        let formatter = TextFormatter(dictionary: [
+            "jira": "Jira",
+            "claude code": "Claude Code",
+            // Literal "$" in the replacement: proves the replacement is
+            // spliced in verbatim and never read as a regex template.
+            "five dollars": "cost is $5",
+            // Deliberately camelCased value: proves capitalizeSentences
+            // leaves an already-cased token alone at a sentence start.
+            "iphone": "iPhone",
+            // Normalization-style value: proves the dictionary still runs
+            // BEFORE capitalization, so a sentence start gets capitalized.
+            "gonna": "going to",
+            // Punctuation-only value: proves the dictionary still runs
+            // BEFORE tidying, so no stray space is left behind.
+            "period": ".",
+            // Non-word edges: \b would never have matched these.
+            "see plus plus": "C++",
+        ])
         let cases: [(input: String, expected: String)] = [
             ("um hello world", "Hello world."),
             ("this is, uh, a test", "This is, a test."),
@@ -141,15 +204,45 @@ struct TextFormatter {
             ("  spaced   out   words ", "Spaced out words."),
             ("already punctuated!", "Already punctuated!"),
             ("", ""),
+            ("the five dollars total", "The cost is $5 total."),
+            ("iphone is great", "iPhone is great."),
+            ("gonna be late", "Going to be late."),
+            ("hello period", "Hello."),
+            ("i love see plus plus", "I love C++"),
         ]
-        var passed = true
         for testCase in cases {
-            let got = formatter.format(testCase.input)
-            let ok = got == testCase.expected
-            if !ok { passed = false }
-            print("\(ok ? "PASS" : "FAIL"): \"\(testCase.input)\" -> \"\(got)\"" +
-                  (ok ? "" : " (expected \"\(testCase.expected)\")"))
+            check(formatter, testCase.input, testCase.expected)
         }
+
+        // A later entry must never rewrite what an earlier entry inserted.
+        check(
+            TextFormatter(dictionary: [
+                "jira ticket": "Jira ticket", "ticket": "TICKET",
+            ]),
+            "File a jira ticket today", "File a Jira ticket today.")
+
+        // Equal-length keys: the total ordering must give the same answer
+        // in every process, whatever the dictionary's hash seed happens
+        // to be. Run the binary repeatedly to confirm.
+        check(
+            TextFormatter(dictionary: [
+                "big apple": "NYC", "apple pie": "dessert",
+            ]),
+            "big apple pie", "NYC pie.")
+
+        // Terms with non-word edges must actually match.
+        checkReplacer(
+            [("see plus plus", "C++"), ("dot net", ".NET"), ("f sharp", "F#")],
+            "see plus plus and dot net and f sharp",
+            "C++ and .NET and F#")
+        checkReplacer([("C++", "C plus plus")], "I write C++ daily", "I write C plus plus daily")
+        checkReplacer([(".NET", "dotnet")], "the .NET runtime", "the dotnet runtime")
+        // Whole-word behaviour is preserved for ordinary terms.
+        checkReplacer([("cat", "dog")], "concatenate the cat", "concatenate the dog")
+        // Degenerate input.
+        checkReplacer([], "unchanged", "unchanged")
+        checkReplacer([("   ", "x")], "unchanged", "unchanged")
+
         return passed
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import ServiceManagement
 import SwiftUI
 
 @MainActor
@@ -19,11 +20,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var hotkey: HotkeyMonitor.Hotkey = Settings.hotkey
     @Published var localeID: String = Settings.locale.identifier
     @Published var lastError: String?
+    @Published var autoPeriod: Bool = Settings.autoPeriod
+    @Published var historyPaused: Bool = Settings.historyPaused
+    @Published var historyRetentionDays: Int = Settings.historyRetentionDays
+    @Published var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
+    @Published var launchAtLoginNote: String?
+    @Published var stats = LifetimeStats()
 
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
     private let recorder = AudioRecorder()
     private let history = HistoryStore()
+    private let statsStore = StatsStore()
     private var transcriber = Transcriber(locale: Settings.locale)
     private lazy var hotkeyMonitor = HotkeyMonitor(hotkey: Settings.hotkey)
     let rewriteEngine = RewriteEngine()
@@ -32,13 +40,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var whisperModel: String = Settings.whisperModel
     @Published var whisperReady = false
     @Published var voiceProfile: VoiceProfile? = VoiceProfileStore.load()
+    /// Guards against stacking multiple concurrent `LanguageModelSession`
+    /// generations: without it, every dictation that lands while a refresh
+    /// is already running would see the still-stale `wordCountAtGeneration`
+    /// and kick off another one, and the manual refresh button had no guard
+    /// at all — stacking one session per click.
+    private var voiceProfileTaskInFlight = false
     private(set) lazy var transformManager = TransformManager(engine: rewriteEngine)
 
     /// Extra status line shown in the top bar while a transform runs.
     @Published var transformStatus: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AudioRecorder.sweepStaleRecordings()
+        AppPaths.secureExistingFiles()
         entries = history.entries
+        statsStore.seed(from: history.entries)
+        stats = statsStore.stats
         setUpStatusItem()
         refreshPermissions(promptAccessibility: true)
         wireHotkey()
@@ -58,6 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     model: Settings.whisperModel)
             }
         }
+        whisperEngine.onError = { [weak self] message in
+            Task { @MainActor in
+                self?.lastError = message
+            }
+        }
         if Settings.engine == "whisper" {
             whisperEngine.preload(model: Settings.whisperModel)
         }
@@ -74,17 +97,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// Regenerates the Voice Profile persona once enough new dictation has
-    /// accumulated. Runs quietly in the background; failures keep the old one.
+    /// accumulated. Runs quietly in the background; failures keep the old
+    /// one. `force: true` (the manual refresh button) always reports back
+    /// via `lastError`/`transformStatus` — automatic background refreshes
+    /// stay quiet on failure so they don't spam the user every dictation.
     func refreshVoiceProfileIfDue(force: Bool = false) {
-        let totalWords = entries.reduce(0) { $0 + $1.wordCount }
+        // Lifetime word count, not `entries.reduce`: `entries` mirrors
+        // HistoryStore, which is capped at 50 and pruned by retention, so
+        // its sum plateaus (or even drops) once the cap is hit and
+        // `totalWords - wordCountAtGeneration >= refreshThreshold` would
+        // become permanently unreachable. `statsStore.stats.words` is the
+        // monotonic lifetime counter.
+        let totalWords = statsStore.stats.words
         guard force || VoiceProfileStore.shouldRefresh(totalWords: totalWords)
         else { return }
-        guard totalWords >= VoiceProfileStore.minimumWords else { return }
+        guard totalWords >= VoiceProfileStore.minimumWords else {
+            if force {
+                lastError = "Dictate at least \(VoiceProfileStore.minimumWords) words " +
+                    "before Murmur can build a Voice Profile — \(totalWords) so far."
+            }
+            return
+        }
+        guard !voiceProfileTaskInFlight else {
+            if force {
+                lastError = "Voice Profile is already refreshing — hang tight."
+            }
+            return
+        }
+        voiceProfileTaskInFlight = true
         let snapshot = entries
+        transformStatus = "Refreshing Voice Profile…"
         Task { [rewriteEngine] in
-            if let profile = await VoiceProfileStore.generate(
-                from: snapshot, totalWords: totalWords, engine: rewriteEngine) {
-                voiceProfile = profile
+            defer {
+                voiceProfileTaskInFlight = false
+                transformStatus = nil
+            }
+            do {
+                voiceProfile = try await VoiceProfileStore.generate(
+                    from: snapshot, totalWords: totalWords, engine: rewriteEngine)
+            } catch {
+                if force {
+                    lastError = "Couldn't refresh Voice Profile: " +
+                        "\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -120,15 +175,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Permissions
 
+    /// Polled every couple of seconds by the window. Each assignment below is
+    /// guarded on an actual change: assigning an equal value to a @Published
+    /// property still fires objectWillChange, which would re-evaluate the whole
+    /// view tree on every tick for no reason.
     func refreshPermissions(promptAccessibility: Bool = false) {
+        let trusted: Bool
         if promptAccessibility {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-            axTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+            trusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
         } else {
-            axTrusted = AXIsProcessTrusted()
+            trusted = AXIsProcessTrusted()
         }
-        micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        whisperReady = whisperEngine.isReady(model: Settings.whisperModel)
+        if axTrusted != trusted { axTrusted = trusted }
+
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if micAuthorized != mic { micAuthorized = mic }
+
+        let ready = whisperEngine.isReady(model: Settings.whisperModel)
+        if whisperReady != ready { whisperReady = ready }
     }
 
     // MARK: - Settings changes (from window or menu)
@@ -170,6 +235,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         entries = []
         rebuildMenu()
     }
+
+    func setAutoPeriod(_ on: Bool) {
+        Settings.autoPeriod = on
+        autoPeriod = on
+    }
+
+    func setHistoryPaused(_ on: Bool) {
+        Settings.historyPaused = on
+        historyPaused = on
+    }
+
+    func setHistoryRetentionDays(_ days: Int) {
+        Settings.historyRetentionDays = days
+        historyRetentionDays = days
+        history.prune()
+        entries = history.entries
+        rebuildMenu()
+    }
+
+    /// Registers/unregisters Murmur as a login item via SMAppService. Note:
+    /// the login item points at the bundle's current on-disk path, so a
+    /// build launched from `build/` (rather than /Applications) registers
+    /// that path — reinstalling elsewhere requires re-registering.
+    func setLaunchAtLogin(_ on: Bool) {
+        var registrationError: String?
+        do {
+            if on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            registrationError = error.localizedDescription
+        }
+
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            launchAtLogin = true
+            launchAtLoginNote = registrationError
+        case .requiresApproval:
+            // Registered, but macOS is waiting on the user to flip it on in
+            // System Settings — that's still "on" from Murmur's point of
+            // view. Forcing the toggle back off here (as before) made it
+            // un-settable: the user re-enables it, sees it snap back off,
+            // and repeats forever. Un-registering still works fine from
+            // this state via the `unregister()` branch above.
+            launchAtLogin = true
+            launchAtLoginNote = registrationError ??
+                "Enable Murmur in System Settings › General › Login Items."
+        default:
+            launchAtLogin = false
+            launchAtLoginNote = registrationError
+        }
+    }
+
+    var dayStreak: Int { statsStore.dayStreak }
+    var wordsPerMinute: Int? { statsStore.wordsPerMinute }
 
     /// Deletes any stale Accessibility grant (recorded against an older
     /// build's signature) and relaunches so macOS asks again — the new grant
@@ -318,16 +440,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                    !formatted.isEmpty,
                    rewriteEngine.isAvailable {
                     transformStatus = "Applying \(style.displayName) style…"
-                    if let rewritten = try? await rewriteEngine.rewrite(
-                        formatted, instructions: instructions),
-                       !rewritten.isEmpty {
-                        formatted = rewritten
+                    do {
+                        let rewritten = try await rewriteEngine.rewrite(
+                            formatted, instructions: instructions)
+                        if !rewritten.isEmpty {
+                            formatted = rewritten
+                        }
+                    } catch {
+                        // Don't fail silently: the Style setting would look
+                        // on but simply stop applying past some length with
+                        // no indication why.
+                        lastError = "Style wasn't applied: \(error.localizedDescription)"
                     }
                     transformStatus = nil
                 }
                 if !formatted.isEmpty {
                     history.add(formatted, duration: duration)
                     entries = history.entries
+                    // Stats are aggregate counters only (no transcript
+                    // text), so pausing History — which is about not
+                    // persisting transcripts to disk — shouldn't freeze
+                    // them too. `history.add` early-returns without
+                    // creating an entry when paused, so `history.entries
+                    // .first` would NOT be the new entry in that case;
+                    // build the entry for stats directly from what was
+                    // just dictated instead of reading it back off history.
+                    statsStore.record(
+                        HistoryEntry(text: formatted, date: Date(), duration: duration))
+                    stats = statsStore.stats
                     refreshVoiceProfileIfDue()
                     if AXIsProcessTrusted() {
                         TextInserter.insert(formatted)
@@ -471,6 +611,24 @@ enum Settings {
     static var whisperModel: String {
         get { defaults.string(forKey: "whisperModel") ?? "small" }
         set { defaults.set(newValue, forKey: "whisperModel") }
+    }
+
+    /// Whether recognized text gets a trailing period auto-appended.
+    static var autoPeriod: Bool {
+        get { defaults.object(forKey: "autoPeriod") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "autoPeriod") }
+    }
+
+    /// When true, dictations are not written to History.
+    static var historyPaused: Bool {
+        get { defaults.bool(forKey: "historyPaused") }
+        set { defaults.set(newValue, forKey: "historyPaused") }
+    }
+
+    /// Days of History to retain; 0 means keep forever.
+    static var historyRetentionDays: Int {
+        get { defaults.integer(forKey: "historyRetentionDays") }
+        set { defaults.set(newValue, forKey: "historyRetentionDays") }
     }
 
     static var locale: Locale {

@@ -38,15 +38,27 @@ enum VoiceProfileStore {
     }
 
     /// Builds the persona from recent transcripts using the on-device model.
+    /// Throws (rather than returning nil) so the caller can surface *why*
+    /// generation didn't happen — silence here previously meant the refresh
+    /// button could do nothing with zero explanation.
     static func generate(
         from entries: [HistoryEntry],
         totalWords: Int,
-        engine: RewriteEngine) async -> VoiceProfile? {
-        guard engine.isAvailable else { return nil }
+        engine: RewriteEngine) async throws -> VoiceProfile {
+        guard engine.isAvailable else {
+            throw NSError(domain: "Murmur", code: 30, userInfo: [
+                NSLocalizedDescriptionKey: engine.availabilityNote
+                    ?? "The on-device model isn't available.",
+            ])
+        }
 
         let samples = entries.prefix(30).map(\.text).joined(separator: "\n")
         let clipped = String(samples.prefix(4000))
-        guard !clipped.isEmpty else { return nil }
+        guard !clipped.isEmpty else {
+            throw NSError(domain: "Murmur", code: 31, userInfo: [
+                NSLocalizedDescriptionKey: "No dictation samples available yet.",
+            ])
+        }
 
         let instructions = """
         You will receive samples of one person's dictated speech. Invent a \
@@ -58,29 +70,30 @@ enum VoiceProfileStore {
         Title: <two word title>
         Style: <one sentence>
         """
-        do {
-            let reply = try await engine.rewrite(clipped, instructions: instructions)
-            var title = ""
-            var summary = ""
-            for line in reply.components(separatedBy: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.lowercased().hasPrefix("title:") {
-                    title = String(trimmed.dropFirst(6))
-                        .trimmingCharacters(in: .whitespaces)
-                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”."))
-                } else if trimmed.lowercased().hasPrefix("style:") {
-                    summary = String(trimmed.dropFirst(6))
-                        .trimmingCharacters(in: .whitespaces)
-                }
+        let reply = try await engine.rewrite(clipped, instructions: instructions)
+        var title = ""
+        var summary = ""
+        for line in reply.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("title:") {
+                title = String(trimmed.dropFirst(6))
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”."))
+            } else if trimmed.lowercased().hasPrefix("style:") {
+                summary = String(trimmed.dropFirst(6))
+                    .trimmingCharacters(in: .whitespaces)
             }
-            guard !title.isEmpty, title.count <= 40 else { return nil }
-            let profile = VoiceProfile(
-                title: title, summary: summary,
-                wordCountAtGeneration: totalWords)
-            save(profile)
-            return profile
-        } catch {
-            return nil
         }
+        guard !title.isEmpty, title.count <= 40 else {
+            throw NSError(domain: "Murmur", code: 32, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Couldn't parse a Voice Profile from the model's reply.",
+            ])
+        }
+        let profile = VoiceProfile(
+            title: title, summary: summary,
+            wordCountAtGeneration: totalWords)
+        save(profile)
+        return profile
     }
 }

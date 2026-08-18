@@ -347,6 +347,13 @@ struct SidebarView: View {
     }
 }
 
+/// Shared compact formatter for large stat counts (e.g. "1.2K").
+fileprivate func compactNumber(_ number: Int) -> String {
+    number >= 1000
+        ? String(format: "%.1fK", Double(number) / 1000)
+        : "\(number)"
+}
+
 // MARK: - Home
 
 struct HomePage: View {
@@ -464,9 +471,9 @@ struct HomePage: View {
 
     private var statsCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            statRow(compactNumber(totalWords), "total words")
+            statRow(compactNumber(app.stats.words), "total words")
             statRow(wpmText, "wpm")
-            statRow("\(dayStreak)", "day streak")
+            statRow("\(app.dayStreak)", "day streak")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
@@ -483,37 +490,9 @@ struct HomePage: View {
         }
     }
 
-    private var totalWords: Int {
-        app.entries.reduce(0) { $0 + $1.wordCount }
-    }
-
     private var wpmText: String {
-        let timed = app.entries.filter { ($0.duration ?? 0) > 1 }
-        let seconds = timed.reduce(0.0) { $0 + ($1.duration ?? 0) }
-        guard seconds > 0 else { return "—" }
-        let words = timed.reduce(0) { $0 + $1.wordCount }
-        return "\(Int(Double(words) / (seconds / 60)))"
-    }
-
-    private var dayStreak: Int {
-        let calendar = Calendar.current
-        let days = Set(app.entries.map { calendar.startOfDay(for: $0.date) })
-        var day = calendar.startOfDay(for: Date())
-        if !days.contains(day) {
-            day = calendar.date(byAdding: .day, value: -1, to: day)!
-        }
-        var streak = 0
-        while days.contains(day) {
-            streak += 1
-            day = calendar.date(byAdding: .day, value: -1, to: day)!
-        }
-        return streak
-    }
-
-    private func compactNumber(_ number: Int) -> String {
-        number >= 1000
-            ? String(format: "%.1fK", Double(number) / 1000)
-            : "\(number)"
+        guard let wpm = app.wordsPerMinute else { return "—" }
+        return "\(wpm)"
     }
 
     // MARK: Voice profile card
@@ -634,63 +613,82 @@ struct HomePage: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 50)
             } else {
-                ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
-                    HStack {
-                        Text(section.title)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .kerning(0.8)
-                        Spacer()
-                        if index == 0 {
-                            if searchOpen {
-                                TextField("Search transcripts", text: $searchText)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 240)
-                            }
-                            Button {
-                                searchOpen.toggle()
-                                if !searchOpen { searchText = "" }
-                            } label: {
-                                Image(systemName: searchOpen
-                                    ? "xmark.circle" : "magnifyingglass")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            Button {
-                                showClearConfirm = true
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Clear all history")
-                            .confirmationDialog(
-                                "Clear all history?", isPresented: $showClearConfirm) {
-                                Button("Clear History", role: .destructive) {
-                                    app.clearHistoryEntries()
-                                }
-                            } message: {
-                                Text("This permanently deletes all \(app.entries.count) " +
-                                     "saved transcripts. This can't be undone.")
-                            }
-                        }
-                    }
-                    .padding(.top, index == 0 ? 0 : 14)
+                historyHeaderRow
 
-                    VStack(spacing: 0) {
-                        ForEach(section.items) { entry in
-                            historyRow(entry)
-                            if entry != section.items.last {
-                                Divider().opacity(0.6)
+                if sections.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                        Text("No matches for \u{201C}\(searchText)\u{201D}")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                } else {
+                    ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+                        HStack {
+                            Text(section.title)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .kerning(0.8)
+                            Spacer()
+                        }
+                        .padding(.top, index == 0 ? 0 : 14)
+
+                        VStack(spacing: 0) {
+                            ForEach(section.items) { entry in
+                                historyRow(entry)
+                                if entry != section.items.last {
+                                    Divider().opacity(0.6)
+                                }
                             }
                         }
+                        .background(Palette.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Palette.border, lineWidth: 1))
                     }
-                    .background(Palette.panel)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Palette.border, lineWidth: 1))
                 }
+            }
+        }
+    }
+
+    private var historyHeaderRow: some View {
+        HStack {
+            Spacer()
+            if searchOpen {
+                TextField("Search transcripts", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+            }
+            Button {
+                searchOpen.toggle()
+                if !searchOpen { searchText = "" }
+            } label: {
+                Image(systemName: searchOpen
+                    ? "xmark.circle" : "magnifyingglass")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            Button {
+                showClearConfirm = true
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Clear all history")
+            .confirmationDialog(
+                "Clear all history?", isPresented: $showClearConfirm) {
+                Button("Clear History", role: .destructive) {
+                    app.clearHistoryEntries()
+                }
+            } message: {
+                Text("This permanently deletes all \(app.entries.count) " +
+                     "saved transcripts. This can't be undone.")
             }
         }
     }
@@ -758,8 +756,8 @@ struct InsightsPage: View {
                 .padding(.top, 24)
 
             HStack(spacing: 16) {
-                tile("\(app.entries.count)", "dictations")
-                tile(compact(totalWords), "total words")
+                tile("\(app.stats.dictations)", "dictations")
+                tile(compactNumber(app.stats.words), "total words")
                 tile(avgWords, "avg words / dictation")
             }
 
@@ -767,6 +765,13 @@ struct InsightsPage: View {
                 Text("Words per day — last 7 days")
                     .font(.headline)
                 chart
+                if last7Days.contains(where: \.hasUnknownCount) {
+                    Text("Hatched bars had a dictation that day, but it " +
+                         "was recorded before Murmur tracked per-day word " +
+                         "counts — lifetime totals above still count it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -774,18 +779,8 @@ struct InsightsPage: View {
         }
     }
 
-    private var totalWords: Int {
-        app.entries.reduce(0) { $0 + $1.wordCount }
-    }
-
     private var avgWords: String {
-        app.entries.isEmpty ? "—" : "\(totalWords / app.entries.count)"
-    }
-
-    private func compact(_ number: Int) -> String {
-        number >= 1000
-            ? String(format: "%.1fK", Double(number) / 1000)
-            : "\(number)"
+        app.stats.dictations == 0 ? "—" : "\(app.stats.words / app.stats.dictations)"
     }
 
     private func tile(_ value: String, _ label: String) -> some View {
@@ -798,15 +793,34 @@ struct InsightsPage: View {
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private var last7Days: [(day: Date, words: Int)] {
+    /// Fixed-format day key matching `StatsStore`'s internal format, so
+    /// `app.stats.dailyWords` can be looked up from here without reaching
+    /// into that private formatter.
+    private static let dayKeyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// Driven by `app.stats.dailyWords` (lifetime, uncapped) rather than
+    /// `app.entries` (which `HistoryStore` caps at 50), so a heavy day no
+    /// longer evicts older days into a fake zero. A day can still show 0
+    /// words while `hasUnknownCount` is true: that's a day migrated from an
+    /// older `stats.json` that only recorded which days were active, not
+    /// per-day counts (see `LifetimeStats.init(from:)`) — a real data gap,
+    /// not a bug, so it's rendered distinctly rather than as a bare zero.
+    private var last7Days: [(day: Date, words: Int, hasUnknownCount: Bool)] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         return (0..<7).reversed().map { offset in
             let day = calendar.date(byAdding: .day, value: -offset, to: today)!
-            let words = app.entries
-                .filter { calendar.isDate($0.date, inSameDayAs: day) }
-                .reduce(0) { $0 + $1.wordCount }
-            return (day, words)
+            let key = Self.dayKeyFormatter.string(from: day)
+            let words = app.stats.dailyWords[key] ?? 0
+            let wasActive = app.stats.dailyWords[key] != nil
+            return (day, words, wasActive && words == 0)
         }
     }
 
@@ -819,10 +833,27 @@ struct InsightsPage: View {
                     Text(point.words > 0 ? "\(point.words)" : "")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(point.words > 0 ? Palette.accent : Palette.border)
-                        .frame(height: max(6,
-                            CGFloat(point.words) / CGFloat(maxWords) * 140))
+                    if point.hasUnknownCount {
+                        // A dictation happened that day, but it predates
+                        // per-day word tracking — show a small hatched
+                        // marker rather than a fabricated bar height or a
+                        // bar that's visually identical to a truly empty
+                        // day.
+                        RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(Palette.accent, lineWidth: 1.5,
+                                          antialiased: true)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(Palette.accent.opacity(0.12)))
+                            .frame(height: 16)
+                            .help("Dictated that day — recorded before " +
+                                  "per-day word counts were tracked.")
+                    } else {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(point.words > 0 ? Palette.accent : Palette.border)
+                            .frame(height: max(6,
+                                CGFloat(point.words) / CGFloat(maxWords) * 140))
+                    }
                     Text(point.day.formatted(.dateTime.weekday(.narrow)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -856,6 +887,12 @@ struct DictionaryPage: View {
                         TextField("spoken phrase", text: $row.spoken)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit { save() }
+                        if isDuplicateSpoken(row) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .help("Duplicate spoken phrase — only one " +
+                                      "entry will be saved.")
+                        }
                         Image(systemName: "arrow.right")
                             .foregroundStyle(.secondary)
                         TextField("replacement", text: $row.replacement)
@@ -881,7 +918,10 @@ struct DictionaryPage: View {
                         Image(systemName: "plus.circle.fill")
                     }
                     .buttonStyle(.borderless)
-                    .disabled(newSpoken.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(newSpoken.trimmingCharacters(in: .whitespaces).isEmpty
+                              || isDuplicateNewSpoken)
+                    .help(isDuplicateNewSpoken
+                          ? "That spoken phrase already has an entry." : "")
                 }
             }
             .padding(20)
@@ -890,9 +930,37 @@ struct DictionaryPage: View {
         .onAppear(perform: load)
     }
 
+    /// Normalized (trimmed, lowercased) spoken phrases that appear on more
+    /// than one row. The dictionary is persisted as `[String: String]`, so
+    /// duplicate spoken keys silently collapse to one entry on save — this
+    /// can't be fixed from MainView without changing that storage format
+    /// (owned by another agent), so instead duplicates are surfaced in the
+    /// UI and adding a new one is blocked.
+    private var duplicateSpokenKeys: Set<String> {
+        let normalized = rows.map {
+            $0.spoken.trimmingCharacters(in: .whitespaces).lowercased()
+        }.filter { !$0.isEmpty }
+        var counts: [String: Int] = [:]
+        for key in normalized { counts[key, default: 0] += 1 }
+        return Set(counts.filter { $0.value > 1 }.keys)
+    }
+
+    private func isDuplicateSpoken(_ row: DictionaryRow) -> Bool {
+        duplicateSpokenKeys.contains(
+            row.spoken.trimmingCharacters(in: .whitespaces).lowercased())
+    }
+
+    private var isDuplicateNewSpoken: Bool {
+        let normalized = newSpoken.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !normalized.isEmpty else { return false }
+        return rows.contains {
+            $0.spoken.trimmingCharacters(in: .whitespaces).lowercased() == normalized
+        }
+    }
+
     private func add() {
         let spoken = newSpoken.trimmingCharacters(in: .whitespaces)
-        guard !spoken.isEmpty else { return }
+        guard !spoken.isEmpty, !isDuplicateNewSpoken else { return }
         rows.append(DictionaryRow(
             spoken: spoken,
             replacement: newReplacement.trimmingCharacters(in: .whitespaces)))
@@ -908,15 +976,18 @@ struct DictionaryPage: View {
     }
 
     private func save() {
+        // Blank-spoken rows are persisted as-is rather than dropped here:
+        // PhraseReplacer (used by TextFormatter.applyDictionary) already
+        // ignores empty/whitespace-only keys at apply time, so saving them
+        // is safe and avoids silently discarding a row's replacement text
+        // while the user is mid-retype of its spoken phrase.
         var dictionary: [String: String] = [:]
         for row in rows {
-            let spoken = row.spoken.trimmingCharacters(in: .whitespaces)
-            if !spoken.isEmpty {
-                dictionary[spoken] = row.replacement
-            }
+            dictionary[row.spoken.trimmingCharacters(in: .whitespaces)] = row.replacement
         }
         if let data = try? JSONEncoder().encode(dictionary) {
             try? data.write(to: TextFormatter.dictionaryURL, options: .atomic)
+            AppPaths.secure(TextFormatter.dictionaryURL)
         }
     }
 }
@@ -964,6 +1035,7 @@ struct ScratchpadPage: View {
 struct SettingsPage: View {
     @ObservedObject var app: AppDelegate
     @State private var supportedLocaleIDs: [String] = []
+    @State private var whisperModelDownloaded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1066,7 +1138,7 @@ struct SettingsPage: View {
                             Text("Whisper model")
                             Text(app.whisperReady
                                 ? "Model loaded — Whisper is transcribing your dictations."
-                                : app.whisperEngine.isModelDownloaded(app.whisperModel)
+                                : whisperModelDownloaded
                                     ? "Model downloaded — loading. Apple engine covers " +
                                       "dictations until it's ready."
                                     : "Downloading in the background. Apple engine covers " +
@@ -1090,8 +1162,73 @@ struct SettingsPage: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Privacy").font(.headline)
+                toggleRow(
+                    title: "Pause history",
+                    detail: "Transcripts are still inserted, just never written to disk.",
+                    isOn: Binding(
+                        get: { app.historyPaused },
+                        set: { app.setHistoryPaused($0) }))
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep history for")
+                        Text("Older transcripts are deleted automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { app.historyRetentionDays },
+                        set: { app.setHistoryRetentionDays($0) })) {
+                        Text("Forever").tag(0)
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Divider()
+                toggleRow(
+                    title: "Add a period automatically",
+                    detail: "Turning this off suits search fields, chat, and code.",
+                    isOn: Binding(
+                        get: { app.autoPeriod },
+                        set: { app.setAutoPeriod($0) }))
+                Divider()
+                toggleRow(
+                    title: "Launch at login",
+                    detail: "Starts Murmur automatically when you sign in.",
+                    isOn: Binding(
+                        get: { app.launchAtLogin },
+                        set: { app.setLaunchAtLogin($0) }))
+                if let note = app.launchAtLoginNote {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
         }
-        .onAppear(perform: loadLocales)
+        .onAppear {
+            loadLocales()
+            refreshWhisperModelDownloaded()
+        }
+        .onChange(of: app.whisperModel) { _, _ in refreshWhisperModelDownloaded() }
+        .onChange(of: app.engine) { _, _ in refreshWhisperModelDownloaded() }
+    }
+
+    /// Recursively walks the Whisper models directory, so it's cached in
+    /// `@State` and only recomputed on appear or when the selected engine
+    /// or model changes — not from `body`, which the 2s permission-refresh
+    /// timer re-evaluates continuously while this page is open.
+    private func refreshWhisperModelDownloaded() {
+        whisperModelDownloaded = app.whisperEngine.isModelDownloaded(app.whisperModel)
     }
 
     private var pickerLocaleIDs: [String] {
@@ -1131,6 +1268,20 @@ struct SettingsPage: View {
                     NSWorkspace.shared.open(url)
                 }
             }
+        }
+    }
+
+    private func toggleRow(
+        title: String, detail: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
         }
     }
 }
@@ -1187,6 +1338,7 @@ struct SnippetsPage: View {
     @State private var snippets: [Snippet] = []
     @State private var newTrigger = ""
     @State private var newExpansion = ""
+    @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1224,7 +1376,7 @@ struct SnippetsPage: View {
                                     in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10)
                             .stroke(Palette.border, lineWidth: 1))
-                        .onChange(of: snippet.expansion) { _, _ in save() }
+                        .onChange(of: snippet.expansion) { _, _ in scheduleSave() }
                 }
                 .padding(16)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
@@ -1263,10 +1415,25 @@ struct SnippetsPage: View {
         .onAppear { snippets = SnippetStore.load() }
     }
 
+    /// Debounces the per-keystroke expansion edits so a full JSON rewrite
+    /// isn't happening on every character — waits for a short pause in
+    /// typing before persisting.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            save()
+        }
+    }
+
     private func save() {
-        SnippetStore.save(snippets.filter {
-            !$0.trigger.trimmingCharacters(in: .whitespaces).isEmpty
-        })
+        // Blank-trigger rows are persisted as-is rather than dropped here:
+        // SnippetStore.expand() already filters empty triggers at expansion
+        // time, so saving them is safe and avoids silently discarding a
+        // snippet's expansion text while the user is mid-retype of its
+        // trigger (e.g. selected-all-deleted the field to type a new one).
+        SnippetStore.save(snippets)
     }
 }
 
@@ -1274,9 +1441,15 @@ struct SnippetsPage: View {
 
 struct StylePage: View {
     @ObservedObject var app: AppDelegate
-    @State private var defaultStyle: WritingStyle = StyleSettings.defaultStyle
-    @State private var overrides: [String: AppStyleRule] = StyleSettings.overrides
+    // Cheap placeholders — the real values are UserDefaults reads + JSON
+    // decodes, so they're loaded once in `.onAppear` rather than in this
+    // initializer, which would otherwise re-run (and be discarded) every
+    // time this view's parent reconstructs it, including on every tick of
+    // the 2s permission-refresh timer while this page is open.
+    @State private var defaultStyle: WritingStyle = .none
+    @State private var overrides: [String: AppStyleRule] = [:]
     @State private var pickedBundleID: String = ""
+    @State private var runningAppsList: [(bundleID: String, name: String)] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1354,14 +1527,14 @@ struct StylePage: View {
                 HStack {
                     Picker("", selection: $pickedBundleID) {
                         Text("Choose a running app…").tag("")
-                        ForEach(runningApps, id: \.bundleID) { appInfo in
+                        ForEach(runningAppsList, id: \.bundleID) { appInfo in
                             Text(appInfo.name).tag(appInfo.bundleID)
                         }
                     }
                     .labelsHidden()
                     .fixedSize()
                     Button("Add rule") {
-                        guard let appInfo = runningApps.first(
+                        guard let appInfo = runningAppsList.first(
                             where: { $0.bundleID == pickedBundleID }) else { return }
                         overrides[appInfo.bundleID] = AppStyleRule(
                             appName: appInfo.name, style: .casual)
@@ -1375,10 +1548,18 @@ struct StylePage: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
         }
+        .onAppear {
+            defaultStyle = StyleSettings.defaultStyle
+            overrides = StyleSettings.overrides
+            refreshRunningApps()
+        }
     }
 
-    private var runningApps: [(bundleID: String, name: String)] {
-        NSWorkspace.shared.runningApplications
+    /// Enumerates `NSWorkspace.shared.runningApplications`, so it's cached
+    /// in `@State` and only refreshed on appear rather than every `body`
+    /// evaluation (see the `.onAppear` comment above).
+    private func refreshRunningApps() {
+        runningAppsList = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap { application in
                 guard let bundleID = application.bundleIdentifier,
@@ -1571,7 +1752,7 @@ struct TrainingPage: View {
     @ObservedObject var app: AppDelegate
     @StateObject private var model = TrainingModel()
     @State private var target = ""
-    @State private var learned = LearnedStore.load()
+    @State private var learned = LearnedData()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1598,8 +1779,9 @@ struct TrainingPage: View {
                                 ? "stop.circle.fill" : "mic.circle.fill")
                             .foregroundStyle(model.isRecording ? .red : Palette.accent)
                     }
-                    .disabled(target.trimmingCharacters(in: .whitespaces).isEmpty
-                              || model.isProcessing || !app.micAuthorized)
+                    .disabled(model.isProcessing || !app.micAuthorized
+                              || (!model.isRecording
+                                  && target.trimmingCharacters(in: .whitespaces).isEmpty))
                     if model.isProcessing {
                         ProgressView().controlSize(.small)
                     }

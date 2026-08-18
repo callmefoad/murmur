@@ -43,6 +43,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur records your voice while you hold the dictation key so it can transcribe it on-device.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Murmur transcribes your speech using macOS's on-device speech recognition. Audio never leaves this Mac.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Local build — no data leaves this Mac.</string>
 </dict>
@@ -51,9 +53,12 @@ PLIST
 
 # Prefer the stable local identity (keeps macOS permission grants valid
 # across rebuilds); fall back to ad-hoc.
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "WhisperFlow Dev"; then
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Murmur Dev"; then
+    codesign --force --sign "Murmur Dev" "$APP"
+    echo "Signed with 'Murmur Dev'."
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "WhisperFlow Dev"; then
     codesign --force --sign "WhisperFlow Dev" "$APP"
-    echo "Signed with 'WhisperFlow Dev'."
+    echo "Signed with legacy identity 'WhisperFlow Dev' to preserve existing permission grants (Accessibility, Microphone). Run scripts/make_signing_cert.sh to create the new 'Murmur Dev' identity — note this will require re-granting permissions."
 else
     codesign --force --sign - "$APP"
     echo "Signed ad-hoc (run scripts/make_signing_cert.sh for a stable identity)."

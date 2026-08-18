@@ -381,8 +381,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         hotkeyMonitor.onCancel = { [weak self] in
             DispatchQueue.main.async {
-                self?.recorder.cancel()
-                self?.uiState = .idle
+                guard let self else { return }
+                // `cancel()` finishes the buffer stream, so the streaming task
+                // returns on its own; cancelling it just drops the result.
+                self.recorder.cancel()
+                self.streamingTask?.cancel()
+                self.streamingTask = nil
+                self.uiState = .idle
             }
         }
         hotkeyMonitor.onHandsFreeChange = { [weak self] active in
@@ -396,11 +401,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var recordingStartedAt: Date?
     private var recordingTargetBundleID: String?
+    /// Live transcription in flight, when `Settings.streamingTranscription`
+    /// is on. Nil for the default file-based path.
+    private var streamingTask: Task<String, Error>?
+
+    /// Live transcription only applies to Apple's SpeechAnalyzer — WhisperKit
+    /// transcribes a finished file, so the Whisper engine always takes the
+    /// file path regardless of the flag.
+    private var streamingEnabled: Bool {
+        Settings.streamingTranscription && Settings.engine != "whisper"
+    }
 
     private func startRecording() {
         guard uiState != .recording else { return }
         do {
-            try recorder.start()
+            if streamingEnabled {
+                let started = try recorder.startStreaming()
+                let biasTerms = LearnedStore.biasTerms()
+                let transcriber = self.transcriber
+                streamingTask = Task {
+                    try await transcriber.transcribe(
+                        buffers: started.stream, inputFormat: started.format,
+                        biasTerms: biasTerms)
+                }
+            } else {
+                try recorder.start()
+            }
             recordingStartedAt = Date()
             recordingTargetBundleID =
                 NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -413,9 +439,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    /// Awaits the live transcript, falling back to the file that was recorded
+    /// alongside it if streaming produced nothing usable. A dictation is never
+    /// lost to a streaming failure — the user just waits the old amount of time
+    /// and sees why in `lastError`.
+    private func streamedTranscript(
+        from task: Task<String, Error>, fallingBackTo url: URL) async throws -> String {
+        do {
+            let text = try await task.value
+            if !text.isEmpty { return text }
+            lastError = "Live transcription returned nothing — " +
+                "transcribed the recording instead."
+        } catch {
+            lastError = "Live transcription failed (\(error.localizedDescription)) — " +
+                "transcribed the recording instead."
+        }
+        return try await recognize(fileAt: url)
+    }
+
     private func stopAndTranscribe() {
         isHandsFree = false
+        let streaming = streamingTask
+        streamingTask = nil
         guard let url = recorder.stop() else {
+            streaming?.cancel()
             uiState = .idle
             return
         }
@@ -429,7 +476,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         Task { [history, rewriteEngine] in
             defer { try? FileManager.default.removeItem(at: url) }
             do {
-                let raw = try await recognize(fileAt: url)
+                let raw: String
+                if let streaming {
+                    raw = try await streamedTranscript(from: streaming, fallingBackTo: url)
+                } else {
+                    raw = try await recognize(fileAt: url)
+                }
                 var formatted = TextFormatter().format(raw)
                 formatted = LearnedStore.apply(in: formatted)
                 formatted = SnippetStore.expand(in: formatted)
@@ -613,10 +665,28 @@ enum Settings {
         set { defaults.set(newValue, forKey: "whisperModel") }
     }
 
+    /// Opt-in live transcription: feed the microphone to SpeechAnalyzer while
+    /// the user speaks instead of transcribing the finished file. Apple engine
+    /// only (WhisperKit needs a finished file). Off by default; flip it with
+    /// `defaults write local.murmur streamingTranscription -bool true`.
+    static var streamingTranscription: Bool {
+        get { defaults.bool(forKey: "streamingTranscription") }
+        set { defaults.set(newValue, forKey: "streamingTranscription") }
+    }
+
     /// Whether recognized text gets a trailing period auto-appended.
     static var autoPeriod: Bool {
         get { defaults.object(forKey: "autoPeriod") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "autoPeriod") }
+    }
+
+    /// When true, the dictation hotkey is swallowed via a session event tap
+    /// so the frontmost app never sees it. Off by default: fn is also a live
+    /// modifier (fn+arrows for Home/End, fn+Delete, fn+F-keys), and swallowing
+    /// its flagsChanged can break those combos system-wide.
+    static var consumeHotkey: Bool {
+        get { defaults.bool(forKey: "consumeHotkey") }
+        set { defaults.set(newValue, forKey: "consumeHotkey") }
     }
 
     /// When true, dictations are not written to History.

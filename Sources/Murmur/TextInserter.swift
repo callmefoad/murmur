@@ -1,10 +1,16 @@
 import AppKit
+import ApplicationServices
 import Carbon.HIToolbox
 import Foundation
 
-/// Inserts text at the cursor of the frontmost app: puts it on the
-/// clipboard, synthesizes ⌘V, then restores the previous clipboard.
+/// Inserts text at the cursor of the frontmost app. Tries direct
+/// Accessibility (AX) insertion first — no clipboard involved — and falls
+/// back to the clipboard+⌘V path when AX insertion isn't viable.
 enum TextInserter {
+
+    /// Escape hatch: flip to `false` in one place if AX insertion misbehaves
+    /// in the field. No UserDefaults key or UI — this is a code-level knob.
+    static var preferDirectInsertion = true
 
     typealias SavedClipboard = [[String: Data]]
 
@@ -39,6 +45,9 @@ enum TextInserter {
     }
 
     static func insert(_ text: String) {
+        if insertViaAccessibility(text) {
+            return
+        }
         let stamp = writeConcealed(text)
         sendKeystroke(kVK_ANSI_V, flags: .maskCommand)
         // Restore only if nothing else claimed the pasteboard meanwhile;
@@ -47,6 +56,105 @@ enum TextInserter {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             attemptRestore(expectedStamp: stamp)
         }
+    }
+
+    // MARK: - Direct Accessibility insertion
+
+    /// Roles this app will attempt direct AX insertion into. `AXWebArea`
+    /// covers the (rare) case where a web engine exposes the focused text
+    /// node's settable value directly on the web-area element itself; the
+    /// settability check below is what actually gates safety, this set just
+    /// narrows to text-bearing roles.
+    private static let axInsertableRoles: Set<String> = [
+        "AXTextField", "AXTextArea", "AXComboBox", "AXWebArea",
+    ]
+
+    /// Attempts to insert `text` at the caret of the focused element via
+    /// the Accessibility API, replacing only the current selection (which
+    /// is empty at a plain caret) rather than the field's whole value.
+    /// Returns false — leaving the clipboard completely untouched — for
+    /// every condition that isn't a clean, verified success, so the caller
+    /// can fall back to the clipboard+⌘V path.
+    private static func insertViaAccessibility(_ text: String) -> Bool {
+        guard preferDirectInsertion, AXIsProcessTrusted() else { return false }
+
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+            let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+        else {
+            return false
+        }
+        let element = focusedRef as! AXUIElement
+
+        // Bail if the field isn't settable at all — read-only, disabled, or
+        // an element that doesn't really support text entry.
+        var settable: DarwinBoolean = false
+        guard
+            AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+                == .success, settable.boolValue
+        else {
+            return false
+        }
+
+        var roleRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+                == .success,
+            let role = roleRef as? String, axInsertableRoles.contains(role)
+        else {
+            return false
+        }
+
+        // Only insert via the selected-text attribute: setting it replaces
+        // the current selection (or inserts at the caret when the
+        // selection is empty), which is exactly paste semantics and can
+        // never clobber content outside the selection. If this attribute
+        // isn't settable, bail to the clipboard path rather than attempt a
+        // value-splice we can't safely verify here.
+        var selectedTextSettable: DarwinBoolean = false
+        guard
+            AXUIElementIsAttributeSettable(
+                element, kAXSelectedTextAttribute as CFString, &selectedTextSettable) == .success,
+            selectedTextSettable.boolValue
+        else {
+            return false
+        }
+
+        let originalRange = selectedRange(of: element)
+
+        guard
+            AXUIElementSetAttributeValue(
+                element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+        else {
+            return false
+        }
+
+        // Verify the write took effect where we can: after inserting,
+        // the caret should have moved to just past the inserted text with
+        // nothing selected. If we couldn't read a range before or after,
+        // we still trust the successful AXError from the set call above.
+        if let originalRange, let newRange = selectedRange(of: element) {
+            let expectedLocation = originalRange.location + (text as NSString).length
+            return newRange.length == 0 && newRange.location == expectedLocation
+        }
+        return true
+    }
+
+    private static func selectedRange(of element: AXUIElement) -> CFRange? {
+        var rangeValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                element, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success,
+            let rangeValue, CFGetTypeID(rangeValue) == AXValueGetTypeID()
+        else {
+            return nil
+        }
+        var range = CFRange()
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else { return nil }
+        return range
     }
 
     /// Copies the current selection in the frontmost app by synthesizing ⌘C.

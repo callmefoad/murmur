@@ -39,10 +39,22 @@ struct Transform: Identifiable {
 /// in any app — like Wispr Flow's Transforms. Uses the on-device model.
 @MainActor
 final class TransformManager {
+    enum Mode {
+        /// A `CGEventTap` is installed; the chord never reaches the frontmost app.
+        case consuming
+        /// Passive `NSEvent` monitors; the chord still reaches other apps.
+        case passive
+        case off
+    }
+
     private let engine: RewriteEngine
+    private var eventTap: EventTap?
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var isRunning = false
+
+    private(set) var mode: Mode = .off
+    var isConsuming: Bool { mode == .consuming }
 
     /// Status line for the UI; nil clears it.
     var onStatus: ((String?) -> Void)?
@@ -54,22 +66,46 @@ final class TransformManager {
 
     func startMonitoring() {
         stopMonitoring()
+
+        // Preferred path: a session event tap, so the chord is swallowed and
+        // never reaches the frontmost app.
+        let tap = EventTap { [weak self] _, event in
+            guard self != nil else { return event }
+            // Only the match decision happens here — cheap, no blocking.
+            guard let nsEvent = NSEvent(cgEvent: event),
+                  let transform = TransformManager.matchingTransform(for: nsEvent)
+            else { return event }
+            Task { @MainActor [weak self] in self?.run(transform) }
+            return nil  // consume: nothing else matches this chord
+        }
+
+        if tap.start(mask: .mask(for: .keyDown)) == nil {
+            eventTap = tap
+            mode = .consuming
+            return
+        }
+
+        // Fallback: passive monitors. Cannot consume, but keeps the chord alive.
+        mode = .passive
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) {
             [weak self] event in
             guard let self else { return }
-            guard let transform = self.matchingTransform(for: event) else { return }
+            guard let transform = TransformManager.matchingTransform(for: event) else { return }
             Task { @MainActor in self.run(transform) }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
             [weak self] event in
             guard let self else { return event }
-            guard let transform = self.matchingTransform(for: event) else { return event }
+            guard let transform = TransformManager.matchingTransform(for: event) else { return event }
             Task { @MainActor in self.run(transform) }
             return nil
         }
     }
 
     func stopMonitoring() {
+        eventTap?.stop()
+        eventTap = nil
+        mode = .off
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
         }
@@ -81,7 +117,9 @@ final class TransformManager {
     }
 
     /// Returns the transform matching this key event's modifiers and key code, if any.
-    private func matchingTransform(for event: NSEvent) -> Transform? {
+    /// `nonisolated static` so the event-tap callback (which is not on the
+    /// main actor) can call it without hopping.
+    nonisolated static func matchingTransform(for event: NSEvent) -> Transform? {
         let modifiers = event.modifierFlags.intersection(
             [.command, .option, .control, .shift])
         guard modifiers == [.control, .option] else { return nil }

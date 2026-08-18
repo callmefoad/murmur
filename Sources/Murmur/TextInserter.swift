@@ -10,7 +10,13 @@ enum TextInserter {
 
     /// Escape hatch: flip to `false` in one place if AX insertion misbehaves
     /// in the field. No UserDefaults key or UI — this is a code-level knob.
-    static var preferDirectInsertion = true
+    /// Whether to try the accessibility path before the clipboard round-trip.
+    /// Defaults to true. Reads UserDefaults each time so it can be turned off
+    /// on a running install without a rebuild:
+    ///     defaults write local.murmur directInsertion -bool false
+    static var preferDirectInsertion: Bool {
+        UserDefaults.standard.object(forKey: "directInsertion") as? Bool ?? true
+    }
 
     typealias SavedClipboard = [[String: Data]]
 

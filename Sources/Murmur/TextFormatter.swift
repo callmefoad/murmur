@@ -5,15 +5,380 @@ import Foundation
 /// substitutions. Mirrors Wispr Flow's "AI edits" with local rules.
 struct TextFormatter {
 
-    /// Filler words removed when they appear as standalone tokens.
+    /// Filler words removed when they appear as standalone tokens
+    /// (English; see `languageRules` for other languages).
     static let fillers: Set<String> = [
         "um", "umm", "uh", "uhh", "uhm", "er", "erm", "ehm", "mhm", "hmm",
     ]
 
+    /// Per-language cleanup rules: filler tokens removed as standalone
+    /// words, plus regex sources for the spoken layout commands.
+    private struct LanguageRules {
+        var fillers: Set<String>
+        var newLineCommand: String
+        var newParagraphCommand: String
+    }
+
+    /// English keeps its optional-space "newline" spelling, hence the
+    /// regex fragment rather than a plain phrase.
+    private static let languageRules: [String: LanguageRules] = [
+        "en": LanguageRules(
+            fillers: fillers,
+            newLineCommand: "new ?line",
+            newParagraphCommand: "new paragraph"),
+        "es": LanguageRules(
+            fillers: ["eh", "este", "o sea", "mmm"],
+            newLineCommand: "nueva línea",
+            newParagraphCommand: "nuevo párrafo"),
+        "fr": LanguageRules(
+            fillers: ["euh", "ben", "quoi"],
+            newLineCommand: "nouvelle ligne",
+            newParagraphCommand: "nouveau paragraphe"),
+        "de": LanguageRules(
+            fillers: ["ähm", "äh", "also"],
+            newLineCommand: "neue Zeile",
+            newParagraphCommand: "neuer Absatz"),
+        "it": LanguageRules(
+            fillers: ["ehm", "insomma"],
+            newLineCommand: "nuova riga",
+            newParagraphCommand: "nuovo paragrafo"),
+        "pt": LanguageRules(
+            fillers: ["éh", "tipo", "né"],
+            newLineCommand: "nova linha",
+            newParagraphCommand: "novo parágrafo"),
+    ]
+
+    /// Resolves a locale to a supported language key, falling back to
+    /// English rules for nil or unsupported language codes.
+    private static func rules(for locale: Locale?) -> LanguageRules {
+        guard let code = locale?.language.languageCode?.identifier,
+              let rules = languageRules[code.lowercased()]
+        else { return languageRules["en"]! }
+        return rules
+    }
+
+    // MARK: - Deliberate symbol & layout tokens
+
+    /// Spoken forms mapped to the glyph they produce. Matching builds a
+    /// longest-first alternation (see `escapedAlternation`), so list order
+    /// here is only for readability — "open parenthesis" always wins over
+    /// any shorter overlapping form.
+    private static let symbolTokens: [(spoken: String, symbol: String)] = [
+        ("open parenthesis", "("), ("close parenthesis", ")"),
+        ("open square bracket", "["), ("close square bracket", "]"),
+        ("exclamation mark", "!"), ("exclamation point", "!"),
+        ("open paren", "("), ("close paren", ")"),
+        ("open bracket", "["), ("close bracket", "]"),
+        ("open quote", "\u{201C}"), ("close quote", "\u{201D}"),
+        ("forward slash", "/"), ("full stop", "."),
+        ("question mark", "?"), ("ampersand", "&"), ("and sign", "&"),
+        ("at sign", "@"), ("hash sign", "#"), ("pound sign", "#"),
+        ("plus sign", "+"), ("equals sign", "="), ("equal sign", "="),
+        ("dollar sign", "$"),
+        ("colon", ":"), ("semicolon", ";"), ("comma", ","),
+        ("period", "."), ("percent", "%"), ("asterisk", "*"),
+        ("star", "*"), ("underscore", "_"), ("hyphen", "-"),
+        ("dash", "-"),
+    ]
+
+    private static let symbolLookup: [String: String] = Dictionary(
+        symbolTokens.map { ($0.spoken.lowercased(), $0.symbol) },
+        uniquingKeysWith: { first, _ in first })
+
+    /// Common collocations where a token word is meant literally. Shielded
+    /// during the symbol pass so "period piece" survives while a lone
+    /// "period" still converts. Kept short on purpose: an over-eager list
+    /// silently disables real commands. Extend as field data warrants.
+    private static let protectedPhrases = [
+        "cooling off period", "grace period", "trial period",
+        "time period", "waiting period", "period piece",
+        "movie star", "rock star", "rising star", "guest star",
+        "all star", "one star", "two star", "three star", "four star",
+        "five star", "dash board",
+    ]
+
+    private static let protectedPhraseRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "(?i)\\b(\(escapedAlternation(protectedPhrases)))\\b")
+    }()
+
+    /// Words the "literally <token>" escape hatch protects from conversion:
+    /// every spoken symbol form plus the layout words themselves.
+    private static var escapeHatchVocabulary: [String] {
+        symbolTokens.map(\.spoken) + ["bullet point", "bullet", "tab key", "tab"]
+    }
+
+    /// One combined scan for symbols, bullets, tabs and the escape hatch.
+    /// A single pass matters: replacements are never rescanned, so the
+    /// word "comma" emitted by "literally comma" cannot be re-converted
+    /// by its own rule later in the same scan.
+    private static let symbolLayoutRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern:
+                "(?i)\\bliterally\\s+(?<lit>\(escapedAlternation(escapeHatchVocabulary)))\\b" +
+                // A bullet opens an item only at the start of the utterance
+                // or right after a line break; elsewhere it stays a word.
+                "|(?<pre>^|\\n)[ \t]*(?<bul>bullet point|bullet)\\b" +
+                "|[ \t]*\\b(?<tab>tab key|tab)\\b[ \t]*" +
+                "|\\b(?<sym>\(escapedAlternation(symbolTokens.map(\.spoken))))\\b")
+    }()
+
+    /// Sorts spoken forms longest-first and joins them into one regex
+    /// alternation, so multi-word forms win against shorter overlaps.
+    private static func escapedAlternation(_ forms: [String]) -> String {
+        forms
+            .sorted { a, b in
+                let wa = a.split(separator: " ").count
+                let wb = b.split(separator: " ").count
+                if wa != wb { return wa > wb }
+                if a.count != b.count { return a.count > b.count }
+                return a < b
+            }
+            .map { NSRegularExpression.escapedPattern(for: $0) }
+            .joined(separator: "|")
+    }
+
+    private static func replaceMatches(
+        in text: String,
+        regex: NSRegularExpression,
+        transform: (_ match: NSTextCheckingResult, _ source: String) -> String?
+    ) -> String {
+        let matches = regex.matches(
+            in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return text }
+        var out = ""
+        var cursor = text.startIndex
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            out += text[cursor..<range.lowerBound]
+            out += transform(match, text) ?? String(text[range])
+            cursor = range.upperBound
+        }
+        out += text[cursor...]
+        return out
+    }
+
+    private static func group(
+        _ name: String, of match: NSTextCheckingResult, in source: String
+    ) -> Substring? {
+        let range = match.range(withName: name)
+        guard range.location != NSNotFound, let r = Range(range, in: source)
+        else { return nil }
+        return source[r]
+    }
+
+    /// Replaces every protected collocation with an opaque placeholder.
+    /// The placeholder removes the words entirely — unlike merely wrapping
+    /// them, which would still expose inner words to any `\b`-anchored
+    /// matcher (the personal dictionary included). Returns the masked text
+    /// plus the original spans for `unmaskProtectedPhrases`.
+    private static func maskProtectedPhrases(
+        in text: String
+    ) -> (masked: String, store: [String]) {
+        var store: [String] = []
+        let masked = replaceMatches(in: text, regex: protectedPhraseRegex) { match, source in
+            guard let r = Range(match.range, in: source) else { return nil }
+            let placeholder = "\u{E000}\(store.count)\u{E001}"
+            store.append(String(source[r]))
+            return placeholder
+        }
+        return (masked, store)
+    }
+
+    private static func unmaskProtectedPhrases(
+        from text: String, store: [String]
+    ) -> String {
+        guard !store.isEmpty else { return text }
+        return replaceMatches(
+            in: text,
+            regex: try! NSRegularExpression(pattern: "\u{E000}(\\d+)\u{E001}")
+        ) { match, source in
+            guard let r = Range(match.range(at: 1), in: source),
+                  let index = Int(source[r]),
+                  index < store.count else { return nil }
+            return store[index]
+        }
+    }
+
+    /// Converts spoken punctuation and layout tokens in one left-to-right
+    /// scan. Every branch below is a spoken-command conversion — there is
+    /// no neutral formatting mixed in (spacing is left to
+    /// `tidyWhitespaceAndPunctuation`), so callers gate the whole call on
+    /// the "Spoken symbols" setting rather than gating it piecemeal:
+    ///
+    /// - symbol tokens ("comma" → ",", "open paren" → "(" …);
+    /// - "bullet"/"bullet point" opens a "- " item at the start of the
+    ///   utterance or right after a line break;
+    /// - "tab key"/"tab" inserts a literal tab (trailing spaces consumed);
+    /// - "literally <token>" emits the word form with no conversion;
+    /// - `protectedPhrases` collocations are shielded from conversion.
+    ///
+    /// Spacing is deliberately left to `tidyWhitespaceAndPunctuation`
+    /// (no space before closing glyphs, none after opening ones).
+    func applySymbolsAndLayout(to text: String) -> String {
+        let (masked, maskStore) = Self.maskProtectedPhrases(in: text)
+        let converted = Self.replaceMatches(
+            in: masked, regex: Self.symbolLayoutRegex
+        ) { match, source in
+            if let literal = Self.group("lit", of: match, in: source) {
+                return String(literal)
+            }
+            if Self.group("bul", of: match, in: source) != nil {
+                let prefix = Self.group("pre", of: match, in: source) ?? ""
+                return prefix + "- "
+            }
+            if Self.group("tab", of: match, in: source) != nil {
+                return "\t"
+            }
+            if let spoken = Self.group("sym", of: match, in: source),
+               let glyph = Self.symbolLookup[spoken.lowercased()] {
+                return glyph
+            }
+            return nil
+        }
+        return Self.unmaskProtectedPhrases(from: converted, store: maskStore)
+    }
+
+    // MARK: - Spoken amounts
+
+    /// Number words understood by the amount parser, including scale words.
+    private static let numberWords: [String: Int] = [
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+        "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+        "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+        "ninety": 90, "hundred": 100, "thousand": 1_000,
+        "million": 1_000_000, "billion": 1_000_000_000,
+    ]
+
+    /// A contiguous amount: EITHER bare digits ("75", "1,250") OR a run of
+    /// number words (optional leading "a"/"an", hyphenated compounds,
+    /// British "and"). The two shapes deliberately never mix — letting a
+    /// digit-led run continue into words would make "<n> dollars" swallow
+    /// a following "<m> cents" spoken without "and". Group names are
+    /// injected by callers because ICU forbids duplicate capture names.
+    private static func amount(named name: String) -> String {
+        let word = escapedAlternation(Array(numberWords.keys))
+        return "(?<\(name)>[0-9][0-9,]*" +
+            "|(?:(?:a|an)[ \t-]+)?(?:\(word))(?:[ \t-]+(?:and[ \t-]+)?(?:\(word)))*)"
+    }
+
+    private static let percentRegex = try! NSRegularExpression(
+        pattern: "(?i)\\b\(amount(named: "amt"))[ \t]+percent\\b")
+
+    private static let dollarsRegex = try! NSRegularExpression(
+        pattern: "(?i)\\b\(amount(named: "amt"))[ \t]+dollars?" +
+            "(?:[ \t]+and[ \t]+\(amount(named: "cents"))[ \t]+cents?)?\\b")
+
+    private static let centsRegex = try! NSRegularExpression(
+        pattern: "(?i)\\b\(amount(named: "amt"))[ \t]+cents?\\b")
+
+    private static let eurosRegex = try! NSRegularExpression(
+        pattern: "(?i)\\b\(amount(named: "amt"))[ \t]+euros?\\b")
+
+    private static let storageRegex = try! NSRegularExpression(
+        pattern: "(?i)\\b\(amount(named: "amt"))[ \t]+" +
+            "(?<unit>terabytes?|gigabytes?|gigs?|megabytes?|megs?|kilobytes?)\\b")
+
+    /// Parses a spoken amount ("twenty five", "one hundred and five",
+    /// "1,250", "hundred") into an integer; nil when nothing numeric
+    /// remains after tokenizing.
+    static func parseAmount(_ text: some StringProtocol) -> Int? {
+        let flattened = String(text).replacingOccurrences(of: ",", with: "")
+        var total = 0
+        var current = 0
+        var sawAny = false
+        for raw in flattened.split(whereSeparator: { [" ", "\t", "-"].contains($0) }) {
+            let word = raw.lowercased()
+            if word == "and" { continue }
+            if let digits = Int(word) {
+                current = digits
+                sawAny = true
+                continue
+            }
+            guard let value = numberWords[word] else { return nil }
+            sawAny = true
+            switch value {
+            case 100:
+                current = max(current, 1) * 100
+            case 1_000, 1_000_000, 1_000_000_000:
+                total += max(current, 1) * value
+                current = 0
+            default:
+                current += value
+            }
+        }
+        return sawAny ? total + current : nil
+    }
+
+    private static func money(_ dollars: Int, _ cents: Int) -> String {
+        let whole = dollars + cents / 100
+        let fraction = cents % 100
+        return fraction == 0
+            ? "$\(whole)"
+            : "$\(whole)." + String(format: "%02d", fraction)
+    }
+
+    /// Converts spoken money/percentage/storage amounts into symbolic form:
+    /// "fifty dollars [and twenty-five cents]" → "$50[.25]",
+    /// "seventy five cents" alone → "$0.75", "twenty euros" → "€20",
+    /// "fifty percent" → "50%", "two gigs" → "2 GB".
+    ///
+    /// Runs on the cleaned stops ONLY — at Verbatim numbers stay words
+    /// (percent still lands as "%" via the symbol pass + tidy glue).
+    /// "Pounds" is deliberately not converted: weight vs currency is
+    /// undecidable from audio alone.
+    func applyNumbersAndCurrency(to text: String) -> String {
+        var result = text
+        // Percent first so "<n> percent" never leaks a bare "%" conversion.
+        result = Self.replaceMatches(in: result, regex: Self.percentRegex) { m, src in
+            guard let amt = Self.group("amt", of: m, in: src),
+                  let value = Self.parseAmount(amt) else { return nil }
+            return "\(value)%"
+        }
+        result = Self.replaceMatches(in: result, regex: Self.dollarsRegex) { m, src in
+            guard let amt = Self.group("amt", of: m, in: src),
+                  let dollars = Self.parseAmount(amt) else { return nil }
+            let cents = Self.group("cents", of: m, in: src)
+                .flatMap { Self.parseAmount($0) } ?? 0
+            return Self.money(dollars, cents)
+        }
+        result = Self.replaceMatches(in: result, regex: Self.centsRegex) { m, src in
+            guard let amt = Self.group("amt", of: m, in: src),
+                  let cents = Self.parseAmount(amt) else { return nil }
+            return Self.money(0, cents)
+        }
+        result = Self.replaceMatches(in: result, regex: Self.eurosRegex) { m, src in
+            guard let amt = Self.group("amt", of: m, in: src),
+                  let value = Self.parseAmount(amt) else { return nil }
+            return "€\(value)"
+        }
+        result = Self.replaceMatches(in: result, regex: Self.storageRegex) { m, src in
+            guard let amt = Self.group("amt", of: m, in: src),
+                  let value = Self.parseAmount(amt),
+                  let unit = Self.group("unit", of: m, in: src) else { return nil }
+            switch unit.lowercased() {
+            case "terabyte", "terabytes": return "\(value) TB"
+            case "gigabyte", "gigabytes", "gig", "gigs": return "\(value) GB"
+            case "megabyte", "megabytes", "meg", "megs": return "\(value) MB"
+            default: return "\(value) KB"
+            }
+        }
+        return result
+    }
+
     var dictionary: [String: String]
 
-    init(dictionary: [String: String] = TextFormatter.loadDictionary()) {
+    private let rules: LanguageRules
+
+    init(
+        dictionary: [String: String] = TextFormatter.loadDictionary(),
+        locale: Locale? = nil
+    ) {
         self.dictionary = dictionary
+        self.rules = Self.rules(for: locale)
     }
 
     static var dictionaryURL: URL {
@@ -27,13 +392,40 @@ struct TextFormatter {
         return dict
     }
 
-    func format(_ raw: String, autoPeriod: Bool = Settings.autoPeriod) -> String {
+    /// - Parameters:
+    ///   - autoPeriod: append a terminal period when none was spoken.
+    ///   - spokenLayout: honor "new line"/"new paragraph" as real breaks.
+    ///   - spokenSymbols: honor spoken punctuation/symbol tokens
+    ///     ("comma" → ",", "star" → "*"). Off by default.
+    ///     All three are threaded in explicitly rather than read from
+    ///     Settings inside, so the function stays pure and deterministic
+    ///     in tests.
+    func format(
+        _ raw: String,
+        autoPeriod: Bool = Settings.autoPeriod,
+        spokenLayout: Bool = Settings.spokenLayout,
+        spokenSymbols: Bool = Settings.spokenSymbols
+    ) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return "" }
 
         text = removeFillers(from: text)
-        text = applySpokenCommands(to: text)
-        text = applyDictionary(to: text)
+        if spokenLayout {
+            text = applySpokenCommands(to: text)
+        }
+        // Amounts resolve BEFORE symbol tokens so the "percent" inside
+        // "fifty percent" is consumed as part of the amount; a bare
+        // "percent" elsewhere still falls through to the "%" glyph.
+        text = applyNumbersAndCurrency(to: text)
+        if spokenSymbols {
+            text = applySymbolsAndLayout(to: text)
+        }
+        // Protected collocations stay shielded through the dictionary pass
+        // too: a personal entry like "period" -> "." must not eat the
+        // words a protection just saved.
+        let (dictionaryMasked, dictionaryMask) = Self.maskProtectedPhrases(in: text)
+        text = applyDictionary(to: dictionaryMasked)
+        text = Self.unmaskProtectedPhrases(from: text, store: dictionaryMask)
         // Dictionary output has to flow through the remaining passes: tidying
         // fixes the spacing left by punctuation-only values ("period" -> "."),
         // and capitalization fixes normalization values that land at a
@@ -47,13 +439,51 @@ struct TextFormatter {
         return text
     }
 
+    /// Cleanup stop `.verbatim`: exactly what was spoken except deliberate
+    /// user intents stay active — personal dictionary substitutions apply,
+    /// and spoken layout commands ("new line"/"new paragraph") apply while
+    /// `spokenLayout` is on (the "Spoken layout" setting, on by default).
+    /// Spoken *symbol* tokens ("comma" → ",") are a separate opt-in and
+    /// are off at every stop unless the user turns them on.
+    /// Filler words are retained, and neither auto-capitalization nor a
+    /// terminal period is ever added. Snippet triggers run separately in
+    /// the dictation pipeline, so they remain active by construction.
+    func formatVerbatim(
+        _ raw: String,
+        spokenLayout: Bool = Settings.spokenLayout,
+        spokenSymbols: Bool = Settings.spokenSymbols
+    ) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return "" }
+
+        if spokenLayout {
+            text = applySpokenCommands(to: text)
+        }
+        // Symbol/layout tokens stay active even verbatim while the user
+        // has opted in; spoken amounts intentionally never do — numbers
+        // stay words at this stop.
+        if spokenSymbols {
+            text = applySymbolsAndLayout(to: text)
+        }
+        let (dictionaryMasked, dictionaryMask) = Self.maskProtectedPhrases(in: text)
+        text = applyDictionary(to: dictionaryMasked)
+        text = Self.unmaskProtectedPhrases(from: text, store: dictionaryMask)
+        // Dictionary output flows through the whitespace/punctuation tidy
+        // exactly as in format(): punctuation-only values ("period" -> ".")
+        // must not leave stray spaces behind. That pass never alters words,
+        // casing, or terminal punctuation, so the transcript stays verbatim.
+        text = tidyWhitespaceAndPunctuation(in: text)
+        return text
+    }
+
     // MARK: - Passes
 
     private func removeFillers(from text: String) -> String {
         var result = text
-        for filler in Self.fillers {
+        for filler in rules.fillers {
             // Filler optionally followed by a comma, as its own word.
-            let pattern = "(?i)(^|\\s)\(filler)[,.]?(?=\\s|$)"
+            let token = NSRegularExpression.escapedPattern(for: filler)
+            let pattern = "(?i)(^|\\s)\(token)[,.]?(?=\\s|$)"
             result = result.replacingOccurrences(
                 of: pattern, with: "$1", options: .regularExpression)
         }
@@ -63,8 +493,8 @@ struct TextFormatter {
     private func applySpokenCommands(to text: String) -> String {
         var result = text
         let commands: [(pattern: String, replacement: String)] = [
-            ("(?i)[,.]?\\s*\\bnew paragraph[,.]?\\s*", "\n\n"),
-            ("(?i)[,.]?\\s*\\bnew ?line[,.]?\\s*", "\n"),
+            ("(?i)[,.]?\\s*\\b\(rules.newParagraphCommand)[,.]?\\s*", "\n\n"),
+            ("(?i)[,.]?\\s*\\b\(rules.newLineCommand)[,.]?\\s*", "\n"),
         ]
         for command in commands {
             result = result.replacingOccurrences(
@@ -83,24 +513,46 @@ struct TextFormatter {
 
     private func tidyWhitespaceAndPunctuation(in text: String) -> String {
         var result = text
-        // Collapse runs of spaces/tabs (not newlines).
+        // Collapse runs of spaces. Tabs survive: they are deliberate
+        // layout output from "tab", including leading indentation.
         result = result.replacingOccurrences(
-            of: "[ \\t]+", with: " ", options: .regularExpression)
-        // No space before closing punctuation.
+            of: " +", with: " ", options: .regularExpression)
+        // Glue a hyphen between alphanumeric neighbours ("twenty - five"
+        // -> "twenty-five"); a dash at a line edge is left alone.
         result = result.replacingOccurrences(
-            of: " +([,.;:!?])", with: "$1", options: .regularExpression)
+            of: "(?<=[0-9A-Za-z])[ \t]*-[ \t]*(?=[0-9A-Za-z])",
+            with: "-", options: .regularExpression)
+        // Slash and currency glue ("yes / no" -> "yes/no",
+        // "$ 42" -> "$42", "# 42" -> "#42").
+        result = result.replacingOccurrences(
+            of: "(?<=/)[ \t]+|[ \t]+(?=/)", with: "",
+            options: .regularExpression)
+        result = result.replacingOccurrences(
+            of: "(?<=[$#€])[ \t]+(?=[0-9A-Za-z(])", with: "",
+            options: .regularExpression)
+        // No space before closing punctuation — now including brackets,
+        // curly closing quotes, percent and underscore.
+        result = result.replacingOccurrences(
+            of: " +([,.;:!?%)\\]}”’_])", with: "$1",
+            options: .regularExpression)
+        // No space after opening brackets/quotes/underscore.
+        result = result.replacingOccurrences(
+            of: "([(\\[{“‘_]) +", with: "$1", options: .regularExpression)
         // Collapse duplicate punctuation like ",." or ".." left by edits.
         result = result.replacingOccurrences(
             of: "([,.;:!?])[,.]", with: "$1", options: .regularExpression)
-        // Trim each line.
+        // Trim each line — spaces only, so a leading tab keeps its indent.
         result = result
             .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " ")) }
             .joined(separator: "\n")
         // At most one blank line in a row.
         result = result.replacingOccurrences(
             of: "\n{3,}", with: "\n\n", options: .regularExpression)
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Overall trim, preserving deliberate leading/trailing tabs.
+        return result.trimmingCharacters(
+            in: CharacterSet.whitespacesAndNewlines
+                .subtracting(CharacterSet(charactersIn: "\t")))
     }
 
     private func capitalizeSentences(in text: String) -> String {
@@ -122,12 +574,20 @@ struct TextFormatter {
                 capitalizeNext = false
             } else if ".!?\n".contains(character) {
                 capitalizeNext = true
-            } else if !character.isWhitespace, !"\"'([{".contains(character) {
+            } else if !character.isWhitespace,
+                      !Self.capitalizationTransparent.contains(character) {
                 capitalizeNext = false
             }
         }
         return String(characters)
     }
+
+    /// Glyphs that neither trigger nor cancel pending capitalization:
+    /// symbol-token output (dash, star, currency…), brackets and quotes —
+    /// so "- item" bullets, "(aside)" asides and “quoted” speech inherit
+    /// natural sentence casing across the glyph.
+    private static let capitalizationTransparent =
+        "-*/_[](){}“”‘’\"'$%&+=@#€"
 
     /// Looks ahead at the whole alphanumeric token beginning at `start` and
     /// reports whether it contains an uppercase letter after its first
@@ -158,7 +618,9 @@ struct TextFormatter {
         var passed = true
 
         func check(_ formatter: TextFormatter, _ input: String, _ expected: String) {
-            let got = formatter.format(input, autoPeriod: true)
+            let got = formatter.format(
+                input, autoPeriod: true, spokenLayout: true,
+                spokenSymbols: true)
             let ok = got == expected
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): \"\(input)\" -> \"\(got)\"" +
@@ -180,7 +642,8 @@ struct TextFormatter {
             "claude code": "Claude Code",
             // Literal "$" in the replacement: proves the replacement is
             // spliced in verbatim and never read as a regex template.
-            "five dollars": "cost is $5",
+            // ("five dollars" itself is claimed by the amount pass.)
+            "five bucks": "cost is $5",
             // Deliberately camelCased value: proves capitalizeSentences
             // leaves an already-cased token alone at a sentence start.
             "iphone": "iPhone",
@@ -204,11 +667,24 @@ struct TextFormatter {
             ("  spaced   out   words ", "Spaced out words."),
             ("already punctuated!", "Already punctuated!"),
             ("", ""),
-            ("the five dollars total", "The cost is $5 total."),
+            ("the five bucks total", "The cost is $5 total."),
             ("iphone is great", "iPhone is great."),
             ("gonna be late", "Going to be late."),
             ("hello period", "Hello."),
             ("i love see plus plus", "I love C++"),
+            // Symbol tokens convert; spacing is tidied afterwards.
+            ("hello comma world period", "Hello, world."),
+            // Bullets open items at utterance start / after a line break.
+            ("bullet buy milk new line bullet eggs", "- Buy milk\n- Eggs."),
+            // Amounts collapse on the cleaned stops.
+            ("it costs fifty dollars", "It costs $50."),
+            ("seventy five cents each", "$0.75 each."),
+            ("fifty percent off", "50% off."),
+            ("two hundred fifty gigabytes free", "250 GB free."),
+            // Protected collocations keep their words.
+            ("a classic period piece film", "A classic period piece film."),
+            // The escape hatch emits the word form untouched.
+            ("say literally comma now", "Say comma now."),
         ]
         for testCase in cases {
             check(formatter, testCase.input, testCase.expected)

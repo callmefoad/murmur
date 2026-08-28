@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct LearnedCorrection: Codable, Identifiable, Equatable {
     var id = UUID()
@@ -22,21 +23,40 @@ struct LearnedData: Codable {
 /// 2. `biasTerms()` feeds the user's vocabulary into the speech model
 ///    before recognition (AnalysisContext contextual strings).
 enum LearnedStore {
+    private static let logger = Logger(subsystem: "local.murmur", category: "learned")
+
     static var fileURL: URL {
         AppPaths.supportDirectory.appendingPathComponent("learned.json")
     }
 
     static func load() -> LearnedData {
-        guard let data = try? Data(contentsOf: fileURL),
-              let learned = try? JSONDecoder().decode(LearnedData.self, from: data)
-        else { return LearnedData() }
-        return learned
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return LearnedData()
+        }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return try JSONDecoder().decode(LearnedData.self, from: data)
+        } catch {
+            logger.error(
+                """
+                Failed to load \(fileURL.path, privacy: .public): \
+                \(String(describing: error), privacy: .public)
+                """)
+            return LearnedData()
+        }
     }
 
     static func save(_ learned: LearnedData) {
-        if let data = try? JSONEncoder().encode(learned) {
-            try? data.write(to: fileURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(learned)
+            try data.write(to: fileURL, options: .atomic)
             AppPaths.secure(fileURL)
+        } catch {
+            logger.error(
+                """
+                Failed to save \(fileURL.path, privacy: .public): \
+                \(String(describing: error), privacy: .public)
+                """)
         }
     }
 
@@ -88,8 +108,12 @@ enum LearnedStore {
 
     /// Learns from a user-corrected transcript: extracts word-level
     /// substitutions and stores each. Returns how many were learned.
+    ///
+    /// Nonisolated async, so callers on the main actor hop off it for the
+    /// whole body — the O(n·m) LCS diff and the per-pair learned.json
+    /// merge never run on main.
     @discardableResult
-    static func learn(original: String, corrected: String) -> Int {
+    static func learn(original: String, corrected: String) async -> Int {
         let pairs = extractCorrections(original: original, corrected: corrected)
         for pair in pairs {
             add(heard: pair.heard, intended: pair.intended)
@@ -112,7 +136,12 @@ enum LearnedStore {
 
     /// Vocabulary handed to the speech model before recognition:
     /// taught terms, learned spellings, dictionary spellings, snippet triggers.
-    static func biasTerms() -> [String] {
+    ///
+    /// Nonisolated async: the body reads up to four JSON files
+    /// (learned.json, dictionary.json, snippets.json), so awaiting this
+    /// from the main actor keeps that disk I/O off it — notably on every
+    /// hotkey key-down.
+    static func biasTerms() async -> [String] {
         let learned = load()
         // Round-robin across the four sources instead of concatenating them.
         // Concatenating starved the last three: `learned.terms` is itself
@@ -164,11 +193,12 @@ enum LearnedStore {
         let originalWords = tokenize(original)
         let correctedWords = tokenize(corrected)
         guard !originalWords.isEmpty, !correctedWords.isEmpty else { return [] }
-        // The LCS table below is O(n*m) *Int*, and this runs synchronously on
-        // the main actor from "Save & Learn". Hands-free dictation reaches
-        // thousands of words, where that table costs hundreds of megabytes
-        // (12,000 words measured at ~1 GB). Long transcripts are not where
-        // per-word pronunciation fixes come from, so bail out instead.
+        // The LCS table below is O(n*m) *Int*, and this runs from "Save &
+        // Learn" (off the main actor via the async `learn`). Hands-free
+        // dictation reaches thousands of words, where that table costs
+        // hundreds of megabytes (12,000 words measured at ~1 GB). Long
+        // transcripts are not where per-word pronunciation fixes come from,
+        // so bail out instead.
         guard originalWords.count <= maxDiffTokens,
               correctedWords.count <= maxDiffTokens else { return [] }
 
@@ -271,7 +301,7 @@ enum LearnedStore {
         }
 
         // A transcript past the token cap must bail out rather than
-        // allocate a huge LCS table on the main actor.
+        // allocate a huge LCS table.
         let long = Array(repeating: "word", count: maxDiffTokens + 1)
             .joined(separator: " ")
         let capped = extractCorrections(original: long, corrected: long + " Søren")

@@ -6,6 +6,10 @@ DerivedData/
 
 # Machine-local tool config (contains local paths)
 .claude/
+.opencode/
+
+# Session scratch notes
+.checkpoint.md
 
 # macOS noise
 .DS_Store

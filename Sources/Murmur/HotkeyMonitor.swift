@@ -40,6 +40,11 @@ final class HotkeyMonitor {
     /// Called when a too-short press should be discarded.
     var onCancel: (() -> Void)?
     var onHandsFreeChange: ((Bool) -> Void)?
+    /// Called first on each key-down; return true to consume the press as an
+    /// undo — it never enters the tap/hold machine (no onStart, and the
+    /// matching key-up is ignored). Deliberate trade-off: a fast double-tap
+    /// right after an insertion spends the first tap on the undo.
+    var onUndoAttempt: (() -> Bool)?
 
     /// How the hotkey is currently being observed.
     enum Mode {
@@ -172,6 +177,12 @@ final class HotkeyMonitor {
             onStop?()
             pressStartedAt = nil
             lastTapEndedAt = nil
+            return
+        }
+        if onUndoAttempt?() == true {
+            // The press undid the last insertion instead of dictating;
+            // leave pressStartedAt nil so its key-up is a no-op.
+            pressStartedAt = nil
             return
         }
         pressStartedAt = Date()

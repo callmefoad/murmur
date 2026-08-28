@@ -81,13 +81,13 @@ struct MurmurMain {
                         fileAt: URL(fileURLWithPath: path),
                         model: whisperModel,
                         localeID: localeIdentifier,
-                        biasTerms: LearnedStore.biasTerms())
+                        biasTerms: await LearnedStore.biasTerms())
                 } else {
                     let transcriber = Transcriber(
                         locale: Locale(identifier: localeIdentifier))
                     raw = try await transcriber.transcribe(
                         fileAt: URL(fileURLWithPath: path),
-                        biasTerms: LearnedStore.biasTerms())
+                        biasTerms: await LearnedStore.biasTerms())
                 }
                 // Full live-dictation pipeline: format → learned corrections
                 // → snippet expansion.

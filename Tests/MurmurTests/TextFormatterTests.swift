@@ -26,10 +26,11 @@ final class TextFormatterTests: XCTestCase {
     /// A dictionary replacement containing a literal "$" must survive
     /// verbatim, proving `applyDictionary` uses `escapedTemplate` rather
     /// than treating the replacement as a regex template (where "$5"
-    /// would be read as a backreference).
+    /// would be read as a backreference). The key deliberately avoids
+    /// "<number> dollars", which the amount pass claims first.
     func testDictionaryReplacementWithLiteralDollarSign() {
-        let formatter = TextFormatter(dictionary: ["five dollars": "cost is $5"])
-        let result = formatter.format("the five dollars total", autoPeriod: true)
+        let formatter = TextFormatter(dictionary: ["five bucks": "cost is $5"])
+        let result = formatter.format("the five bucks total", autoPeriod: true)
         XCTAssertEqual(result, "The cost is $5 total.")
     }
 
@@ -152,5 +153,91 @@ final class TextFormatterTests: XCTestCase {
 
     func testBuiltInSelfTestStillPasses() {
         XCTAssertTrue(TextFormatter.runSelfTest())
+    }
+
+    // MARK: - Language rules
+
+    /// Spanish filler removal ("eh", "este", "o sea", "mmm").
+    func testSpanishFillerRemoval() {
+        let formatter = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "es-ES"))
+        XCTAssertEqual(formatter.format("hola eh mundo", autoPeriod: true), "Hola mundo.")
+        XCTAssertEqual(
+            formatter.format("este es un test", autoPeriod: true), "Es un test.")
+        XCTAssertEqual(
+            formatter.format("bueno, mmm, o sea bien", autoPeriod: true), "Bueno, bien.")
+    }
+
+    /// Spanish spoken layout commands: "nueva línea" / "nuevo párrafo".
+    func testSpanishSpokenLayoutCommands() {
+        let formatter = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "es-ES"))
+        XCTAssertEqual(
+            formatter.format("primera línea nueva línea segunda línea", autoPeriod: true),
+            "Primera línea\nSegunda línea.")
+        XCTAssertEqual(
+            formatter.format("intro nuevo párrafo detalles aquí", autoPeriod: true),
+            "Intro\n\nDetalles aquí.")
+    }
+
+    /// German filler removal ("ähm", "äh", "also").
+    func testGermanFillerRemoval() {
+        let formatter = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "de-DE"))
+        XCTAssertEqual(
+            formatter.format("also ich denke ähm ja", autoPeriod: true), "Ich denke ja.")
+        XCTAssertEqual(
+            formatter.format("äh hallo welt", autoPeriod: true), "Hallo welt.")
+    }
+
+    /// German spoken layout commands: "neue Zeile" / "neuer Absatz".
+    func testGermanSpokenLayoutCommands() {
+        let formatter = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "de-DE"))
+        XCTAssertEqual(
+            formatter.format("erste Zeile neue Zeile zweite Zeile", autoPeriod: true),
+            "Erste Zeile\nZweite Zeile.")
+        XCTAssertEqual(
+            formatter.format("einleitung neuer Absatz details hier", autoPeriod: true),
+            "Einleitung\n\nDetails hier.")
+    }
+
+    /// The remaining Romance languages resolve their own filler and
+    /// command sets (spot check one phrase each).
+    func testFrenchItalianPortugueseRulesResolve() {
+        XCTAssertEqual(
+            TextFormatter(dictionary: [:], locale: Locale(identifier: "fr-FR"))
+                .format("euh bonjour le monde", autoPeriod: false),
+            "Bonjour le monde")
+        XCTAssertEqual(
+            TextFormatter(dictionary: [:], locale: Locale(identifier: "it-IT"))
+                .format("ehm ciao a tutti", autoPeriod: false),
+            "Ciao a tutti")
+        XCTAssertEqual(
+            TextFormatter(dictionary: [:], locale: Locale(identifier: "pt-BR"))
+                .format("tipo isso né", autoPeriod: false),
+            "Isso")
+    }
+
+    /// Unknown or unsupported language codes fall back to the English
+    /// rule set — English fillers still apply, foreign ones don't.
+    func testUnknownLanguageFallsBackToEnglish() {
+        let unknownCode = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "xx-YY"))
+        let unsupportedRegion = TextFormatter(
+            dictionary: [:], locale: Locale(identifier: "en_US_POSIX"))
+        let noLocale = TextFormatter(dictionary: [:])
+        for formatter in [unknownCode, unsupportedRegion, noLocale] {
+            XCTAssertEqual(
+                formatter.format("this is, uh, a test", autoPeriod: true),
+                "This is, a test.")
+            XCTAssertEqual(
+                formatter.format("first new line second", autoPeriod: true),
+                "First\nSecond.")
+        }
+        // German fillers must NOT be stripped under the English fallback.
+        XCTAssertEqual(
+            unknownCode.format("also ich denke ähm ja", autoPeriod: false),
+            "Also ich denke ähm ja")
     }
 }

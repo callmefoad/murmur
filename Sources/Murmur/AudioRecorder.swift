@@ -26,6 +26,12 @@ final class AudioRecorder {
     private(set) var currentFileURL: URL?
     private(set) var isRecording = false
 
+    /// Called with each tap buffer's RMS level (~every 85 ms at the standard
+    /// 4096-frame/48 kHz tap), hopped to the main queue. Set once at launch,
+    /// before any tap exists, so no synchronisation is needed. Used by the
+    /// dictation HUD's input meter.
+    var onLevel: ((Float) -> Void)?
+
     /// How many tap buffers may queue up for a slow consumer before the
     /// oldest are dropped. At the usual 4096-frame/48 kHz tap that is a
     /// little over five seconds of audio — enough to cover analyzer startup
@@ -106,6 +112,10 @@ final class AudioRecorder {
                     self.streamContinuation?.yield(copy)
                 }
             }
+            if let onLevel = self.onLevel {
+                let level = Self.rms(of: buffer)
+                DispatchQueue.main.async { onLevel(level) }
+            }
         }
 
         fileLock.withLock {
@@ -142,6 +152,23 @@ final class AudioRecorder {
         if let url = stop() {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Root-mean-square amplitude of one buffer across all channels.
+    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let data = buffer.floatChannelData else { return 0 }
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return 0 }
+        var sum: Float = 0
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let samples = data[channel]
+            for index in 0..<frames {
+                let sample = samples[index]
+                sum += sample * sample
+            }
+        }
+        let count = Float(frames * Int(buffer.format.channelCount))
+        return sqrt(sum / count)
     }
 
     /// Duplicates a tap buffer so it can safely outlive the render callback.

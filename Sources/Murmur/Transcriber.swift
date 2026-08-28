@@ -7,6 +7,11 @@ import Speech
 final class Transcriber {
     let locale: Locale
 
+    /// Optional sink for interim streaming transcripts — invoked as partial
+    /// results arrive during `transcribe(buffers:)` (used by the dictation
+    /// HUD). Never called by the file-based path.
+    var onPartialTranscript: ((String) -> Void)?
+
     init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
     }
@@ -112,6 +117,11 @@ final class Transcriber {
             .reduce(into: AttributedString("")) { partial, result in
                 partial.append(result.text)
                 partial.append(AttributedString(" "))
+                if let onPartial = self.onPartialTranscript {
+                    let text = String(partial.characters)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty { onPartial(text) }
+                }
             }
 
         do {

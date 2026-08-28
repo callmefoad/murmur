@@ -16,6 +16,10 @@ speech and language models, with an optional local Whisper engine.
 
 - **Push-to-talk dictation** — hold `fn` (or right ⌥) anywhere; release to
   paste at your cursor. Double-tap for hands-free mode.
+- **Undo** — tap the hotkey again within ~2 s of an insertion to take it
+  back (window configurable via `undoWindowSeconds`).
+- **Live caption HUD** — optional floating capsule near your cursor shows a
+  waveform meter and live partial text while you speak.
 - **Two recognition engines**, both offline:
   - **Apple** — instant, built into macOS (SpeechAnalyzer, macOS 26).
   - **Whisper** — optional precision engine via
@@ -26,14 +30,25 @@ speech and language models, with an optional local Whisper engine.
   automatically; everything biases future recognition.
 - **Cleanup pipeline** — filler-word removal, spoken "new line"/"new
   paragraph", auto-capitalization, personal dictionary, snippets
-  (say a trigger phrase → paste a saved block).
+  (say a trigger phrase → paste a saved block). Cleanup rules are
+  locale-aware (English, Spanish, French, German, Italian, Portuguese).
+- **My Voice presets** — write your own rewrite instructions ("tighten my
+  phrasing, always contractions, no exclamation marks") and apply them to
+  every dictation with the on-device model. Bind presets to specific apps,
+  quick-switch from the menu bar.
+- **Snippets** — say a trigger phrase → paste a saved block, now with
+  `{{date}}`, `{{time}}`, `{{datetime}}`, and `{{clipboard}}` variables.
 - **Styles** — per-app tone rewriting (formal / casual / very casual) using
   Apple Intelligence's on-device model.
 - **Transforms** — select text in any app, press ⌥1 to polish grammar or ⌥2
   to turn rough notes into a structured AI prompt, rewritten in place.
 - **Dashboard** — history with search and correction-learning, usage stats
   (words, WPM, day streak), insights chart, a Voice Profile persona derived
-  locally from what you dictate, scratchpad.
+  locally from what you dictate, scratchpad, and the My Voice preset editor.
+  Export history as JSON or Markdown; keep 50–1000 transcripts.
+- **Quiet failure handling** — transcription, microphone, and permission
+  errors surface as macOS notifications (requested only when first needed)
+  plus the dashboard caption.
 
 ## Requirements
 
@@ -48,14 +63,16 @@ speech and language models, with an optional local Whisper engine.
 ```bash
 git clone <this-repo>
 cd murmur
-./scripts/make_app.sh     # builds build/Murmur.app
-open build/Murmur.app
+./scripts/make_app.sh     # builds build/Murmur.app and hot-swaps any
+                          # running instance with the new build
 ```
 
 Optional: run `./scripts/make_signing_cert.sh` once to create a local
 self-signed signing certificate — this keeps macOS permission grants valid
-across rebuilds. Without it the app is ad-hoc signed and you'll need to
-re-grant Accessibility after each rebuild.
+across rebuilds and enables hardened-runtime signing (applied automatically
+when a signing identity is found). Set `MURMUR_VERSION=x.y.z` to override
+the bundle version, or `MURMUR_NORESTART=1` to skip the automatic
+restart of a running instance after each build.
 
 ### One-time permissions
 

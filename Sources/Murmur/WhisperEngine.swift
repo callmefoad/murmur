@@ -109,13 +109,56 @@ final class WhisperEngine {
         }
     }
 
+    // MARK: - Language mapping
+
+    /// The full set of language tokens Whisper's multilingual models accept,
+    /// grounded in the vendored WhisperKit list
+    /// (`TextDecoder Constants.languages`, Models.swift).
+    static let whisperTokens: Set<String> = [
+        "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
+        "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi",
+        "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no",
+        "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk",
+        "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk",
+        "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw",
+        "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc",
+        "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+        "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+        "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue",
+    ]
+
+    /// BCP-47 primary subtags that need more than region-stripping to become
+    /// a valid Whisper token.
+    static let languageOverrides: [String: String] = [
+        "nb": "no",   // Norwegian Bokmål — Whisper only has "no"/"nn"
+        "cmn": "zh",  // Mandarin macrolanguage tag
+        "iw": "he",   // legacy Hebrew code still emitted by some APIs
+        "in": "id",   // legacy Indonesian code
+        "ji": "yi",   // legacy Yiddish code
+        "jv": "jw",   // Javanese: ISO 639-1 "jv" vs Whisper token "jw"
+    ]
+
+    /// Maps a BCP-47 locale identifier ("en-US", "zh-Hant-TW", "yue-Hant-HK")
+    /// to the closest Whisper language token. Pure function; falls back to
+    /// "en" when nothing matches. Script/region variants of Chinese all map
+    /// to "zh" because that is all the model offers ("yue" requires an
+    /// explicit yue-* locale).
+    static func whisperLanguage(for localeID: String) -> String {
+        guard let primary = localeID.split(separator: "-").first else {
+            return "en"
+        }
+        let code = primary.lowercased()
+        if let override = languageOverrides[code] { return override }
+        return whisperTokens.contains(code) ? code : "en"
+    }
+
     func transcribe(
         fileAt url: URL, model: String, localeID: String,
         biasTerms: [String]) async throws -> String {
         let pipe = try await pipeline(model: model)
 
         var options = DecodingOptions()
-        options.language = String(localeID.prefix(while: { $0 != "-" })).lowercased()
+        options.language = Self.whisperLanguage(for: localeID)
         // Timestamps aren't needed for dictation — skipping them trims
         // decoding work. VAD chunking only pays off on long recordings.
         options.withoutTimestamps = true

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Intentionally minimal. Murmur is non-sandboxed; microphone and speech
+	  recognition access are TCC permission grants driven by the Info.plist
+	  usage descriptions, not entitlements. Add keys here only if a concrete
+	  need appears (e.g. com.apple.security.cs.allow-jit).
+	-->
+</dict>
+</plist>

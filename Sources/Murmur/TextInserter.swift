@@ -50,9 +50,30 @@ enum TextInserter {
         return pasteboard.changeCount
     }
 
-    static func insert(_ text: String) {
+    /// The mechanism that succeeded plus any selection it overwrote, so
+    /// the caller can record an exact-mechanics undo.
+    struct InsertionOutcome: Equatable {
+        var method: InsertionMethod
+        /// The non-empty selection this insertion replaced, snapshotted
+        /// before the write; nil for a plain caret insertion or when the
+        /// selection could not be read.
+        var replacedText: String?
+    }
+
+    /// Returns what happened (mechanism + replaced selection, if any) so
+    /// the caller can record it for a later matching undo.
+    @discardableResult
+    static func insert(_ text: String) -> InsertionOutcome {
+        // Snapshot the selection BEFORE either write path touches the app:
+        // the AX path replaces it directly and ⌘V replaces it natively, so
+        // the pre-write snapshot is exactly what an undo must restore.
+        let priorSelection = AXIsProcessTrusted() ? readFocusedSelection() : nil
+        let replaced =
+            InsertionTracker.isReplacement(selectedText: priorSelection)
+            ? priorSelection : nil
+
         if insertViaAccessibility(text) {
-            return
+            return InsertionOutcome(method: .ax, replacedText: replaced)
         }
         let stamp = writeConcealed(text)
         sendKeystroke(kVK_ANSI_V, flags: .maskCommand)
@@ -61,6 +82,78 @@ enum TextInserter {
         // reading the pasteboard does not change its changeCount.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             attemptRestore(expectedStamp: stamp)
+        }
+        return InsertionOutcome(method: .paste, replacedText: replaced)
+    }
+
+    // MARK: - Undo last insertion
+
+    /// Removes or restores text previously inserted by `insert(_:)`, using
+    /// mechanics matched to how it went in (per `InsertionTracker.undoPlan`).
+    /// Returns false when nothing could be done (no trusted AX session and
+    /// no viable range) — the insertion is then left in place for the user
+    /// to remove by hand.
+    @discardableResult
+    static func undo(_ insertion: LastInsertion) -> Bool {
+        switch InsertionTracker.undoPlan(for: insertion) {
+        case .nativeUndo:
+            // A paste is normally one undoable edit in the target app's own
+            // undo stack, so a single synthesized ⌘Z removes exactly it and
+            // natively brings back whatever selection the paste replaced —
+            // no clipboard or range bookkeeping needed or even possible,
+            // since we never knew where the caret was relative to the text.
+            sendKeystroke(kVK_ANSI_Z, flags: .maskCommand)
+            return true
+        case .restoreOriginal:
+            if let replaced = insertion.replacedText,
+                overwriteTrailingSpan(
+                    length: (insertion.text as NSString).length, with: replaced) {
+                return true
+            }
+            if deleteTrailingText(insertion.text) { return true }
+            backspace(times: insertion.text.count)
+            return true
+        case .deleteInserted:
+            if deleteTrailingText(insertion.text) { return true }
+            backspace(times: insertion.text.count)
+            return true
+        }
+    }
+
+    /// Selects the `length` UTF-16 units ending at the caret — where a
+    /// direct AX write leaves it — via `AXSelectedTextRange`, then writes
+    /// `replacement` into that span by setting `kAXSelectedTextAttribute`:
+    /// "" deletes the span, other text swaps the inserted dictation back
+    /// for what the insertion had replaced. Requires a collapsed caret at
+    /// or after the span, i.e. nothing has moved since the write.
+    private static func overwriteTrailingSpan(length: Int, with replacement: String) -> Bool {
+        guard length >= 0, let element = focusedElement() else { return false }
+        guard let caret = selectedRange(of: element), caret.length == 0, caret.location >= length
+        else {
+            return false
+        }
+        var span = CFRange(location: caret.location - length, length: length)
+        guard let axSpan = AXValueCreate(.cfRange, &span) else { return false }
+        guard
+            AXUIElementSetAttributeValue(
+                element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success
+        else {
+            return false
+        }
+        return AXUIElementSetAttributeValue(
+            element, kAXSelectedTextAttribute as CFString, replacement as CFString) == .success
+    }
+
+    /// Deletes the inserted text (which ends at the caret).
+    private static func deleteTrailingText(_ text: String) -> Bool {
+        overwriteTrailingSpan(length: (text as NSString).length, with: "")
+    }
+
+    /// Fallback when AX range operations fail: one synthesized backspace per
+    /// character of the inserted text.
+    private static func backspace(times count: Int) {
+        for _ in 0..<max(0, count) {
+            sendKeystroke(kVK_Delete, flags: [])
         }
     }
 
@@ -78,22 +171,15 @@ enum TextInserter {
     /// Attempts to insert `text` at the caret of the focused element via
     /// the Accessibility API, replacing only the current selection (which
     /// is empty at a plain caret) rather than the field's whole value.
-    /// Returns false — leaving the clipboard completely untouched — for
-    /// every condition that isn't a clean, verified success, so the caller
-    /// can fall back to the clipboard+⌘V path.
+    /// Setting `kAXSelectedTextAttribute` REPLACES whatever is selected —
+    /// a bare caret is just a zero-length selection, so this single write
+    /// covers both plain insertion and selection replacement, exactly like
+    /// paste. Returns false — leaving the clipboard completely untouched —
+    /// for every condition that isn't a clean, verified success, so the
+    /// caller can fall back to the clipboard+⌘V path.
     private static func insertViaAccessibility(_ text: String) -> Bool {
-        guard preferDirectInsertion, AXIsProcessTrusted() else { return false }
-
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard
-            AXUIElementCopyAttributeValue(
-                systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-            let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else {
-            return false
-        }
-        let element = focusedRef as! AXUIElement
+        guard preferDirectInsertion, AXIsProcessTrusted(), let element = focusedElement()
+        else { return false }
 
         // Bail if the field isn't settable at all — read-only, disabled, or
         // an element that doesn't really support text entry.
@@ -138,15 +224,70 @@ enum TextInserter {
             return false
         }
 
-        // Verify the write took effect where we can: after inserting,
-        // the caret should have moved to just past the inserted text with
-        // nothing selected. If we couldn't read a range before or after,
-        // we still trust the successful AXError from the set call above.
+        // Verify the write took effect where we can: the caret should now
+        // sit just past the written text with nothing selected. The same
+        // arithmetic holds whether the write replaced a selection or landed
+        // at a bare caret (InsertionTracker.postWriteCaretLocation), so one
+        // check covers both modes. If we couldn't read a range before or
+        // after, we still trust the successful AXError from the set call.
         if let originalRange, let newRange = selectedRange(of: element) {
-            let expectedLocation = originalRange.location + (text as NSString).length
+            let expectedLocation = InsertionTracker.postWriteCaretLocation(
+                selectionLocation: originalRange.location,
+                replacementUTF16Length: (text as NSString).length)
             return newRange.length == 0 && newRange.location == expectedLocation
         }
         return true
+    }
+
+    /// The focused UI element of the frontmost app, or nil when Accessibility
+    /// isn't trusted or no focused element can be resolved.
+    private static func focusedElement() -> AXUIElement? {
+        guard AXIsProcessTrusted() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+            let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+        else {
+            return nil
+        }
+        return focusedRef as! AXUIElement
+    }
+
+    /// Reads a string-valued attribute off an element, nil on any failure or
+    /// type mismatch.
+    private static func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
+        var ref: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success,
+            let value = ref as? String
+        else {
+            return nil
+        }
+        return value
+    }
+
+    /// Snapshots the focused element's selected text so an insertion can
+    /// record what it is about to replace. Tries `kAXSelectedTextAttribute`
+    /// first and falls back to slicing `kAXValueAttribute` by the selected
+    /// range (some apps expose a range but never populate the string). nil
+    /// means "cannot tell" — callers must treat that as no selection rather
+    /// than guessing; an empty result is a genuine empty selection.
+    private static func readFocusedSelection() -> String? {
+        guard let element = focusedElement() else { return nil }
+        if let direct = stringAttribute(element, kAXSelectedTextAttribute) {
+            return direct
+        }
+        guard let range = selectedRange(of: element),
+            let fullValue = stringAttribute(element, kAXValueAttribute),
+            range.location >= 0, range.length >= 0,
+            range.location + range.length <= (fullValue as NSString).length
+        else {
+            return nil
+        }
+        return (fullValue as NSString).substring(
+            with: NSRange(location: range.location, length: range.length))
     }
 
     private static func selectedRange(of element: AXUIElement) -> CFRange? {

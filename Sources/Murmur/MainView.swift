@@ -1,6 +1,7 @@
 import AppKit
 import Speech
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Palette (Murmur: warm paper, soft teal, adaptive light/dark)
 
@@ -52,7 +53,8 @@ enum Palette {
 // MARK: - Pages
 
 enum Page: Hashable {
-    case home, insights, dictionary, training, snippets, style, transforms, scratchpad
+    case home, insights, dictionary, training, snippets, myVoice, style
+    case transforms, scratchpad
     case settings, help
 
     var label: String {
@@ -62,6 +64,7 @@ enum Page: Hashable {
         case .dictionary: return "Dictionary"
         case .training: return "Voice Training"
         case .snippets: return "Snippets"
+        case .myVoice: return "My Voice"
         case .style: return "Style"
         case .transforms: return "Transforms"
         case .scratchpad: return "Scratchpad"
@@ -77,6 +80,7 @@ enum Page: Hashable {
         case .dictionary: return "text.book.closed"
         case .training: return "waveform.badge.mic"
         case .snippets: return "scissors"
+        case .myVoice: return "person.wave.2"
         case .style: return "textformat"
         case .transforms: return "wand.and.sparkles"
         case .scratchpad: return "square.and.pencil"
@@ -86,8 +90,8 @@ enum Page: Hashable {
     }
 
     static let mainItems: [Page] = [
-        .home, .insights, .dictionary, .training, .snippets, .style, .transforms,
-        .scratchpad,
+        .home, .insights, .dictionary, .training, .snippets, .myVoice, .style,
+        .transforms, .scratchpad,
     ]
     static let bottomItems: [Page] = [.settings, .help]
 }
@@ -183,6 +187,7 @@ struct MainView: View {
         case .dictionary: DictionaryPage()
         case .training: TrainingPage(app: app)
         case .snippets: SnippetsPage()
+        case .myVoice: MyVoicePage(app: app, voiceStore: app.voiceStore)
         case .style: StylePage(app: app)
         case .transforms: TransformsPage(app: app)
         case .scratchpad: ScratchpadPage()
@@ -403,13 +408,20 @@ struct HomePage: View {
                     Spacer()
                     Button("Cancel") { editingEntry = nil }
                     Button("Save & Learn") {
-                        let learnedCount = app.correctHistoryEntry(
-                            id: entry.id, newText: editText)
-                        learnFeedback = learnedCount > 0
-                            ? "Learned \(learnedCount) correction" +
-                              "\(learnedCount == 1 ? "" : "s") from your fix."
-                            : "Transcript updated."
-                        editingEntry = nil
+                        // Copy sheet state first: it resets when the sheet
+                        // is dismissed below, and learning now completes
+                        // asynchronously off the main actor.
+                        let editedID = entry.id
+                        let newText = editText
+                        Task {
+                            let learnedCount = await app.correctHistoryEntry(
+                                id: editedID, newText: newText)
+                            learnFeedback = learnedCount > 0
+                                ? "Learned \(learnedCount) correction" +
+                                  "\(learnedCount == 1 ? "" : "s") from your fix."
+                                : "Transcript updated."
+                            editingEntry = nil
+                        }
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -586,6 +598,40 @@ struct HomePage: View {
         return day.formatted(.dateTime.weekday(.wide).month().day()).uppercased()
     }
 
+    // MARK: History export
+
+    private enum HistoryExportFormat {
+        case json, markdown
+
+        var fileExtension: String { self == .json ? "json" : "md" }
+    }
+
+    /// Runs a save panel and writes every stored transcript in the chosen
+    /// format. Failures surface through the same `lastError` caption the
+    /// rest of the app uses (plus a notification if the window is closed).
+    private func exportHistory(_ format: HistoryExportFormat) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [
+            format == .json
+                ? .json
+                : UTType(filenameExtension: "md") ?? .plainText
+        ]
+        panel.nameFieldStringValue = "murmur-history.\(format.fileExtension)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data: Data
+            switch format {
+            case .json:
+                data = try app.exportHistoryJSONData()
+            case .markdown:
+                data = Data(app.exportHistoryMarkdown().utf8)
+            }
+            try data.write(to: url, options: .atomic)
+        } catch {
+            app.lastError = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
     private var historyFeed: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let feedback = learnFeedback {
@@ -673,6 +719,18 @@ struct HomePage: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            Menu {
+                Button("Export JSON…") { exportHistory(.json) }
+                Button("Export Markdown…") { exportHistory(.markdown) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Export history")
             Button {
                 showClearConfirm = true
             } label: {
@@ -1158,6 +1216,80 @@ struct SettingsPage: View {
                         .fixedSize()
                     }
                 }
+                Divider()
+                toggleRow(
+                    title: "Live caption while dictating",
+                    detail: "Shows a floating waveform — and live text when " +
+                            "streaming recognition is on — while you dictate.",
+                    isOn: Binding(
+                        get: { app.liveCaptions },
+                        set: { app.setLiveCaptions($0) }))
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Cleanup level")
+                            Text("Cleaned is the default. Polished and Tightened " +
+                                 "rewrite with the on-device model, which can " +
+                                 "reword more than you intended.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { app.cleanupLevel },
+                            set: { app.setCleanupLevel($0) })) {
+                            Text("Verbatim").tag(0)
+                            Text("Cleaned").tag(1)
+                            Text("Polished").tag(2)
+                            Text("Tightened").tag(3)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    Text(cleanupStopBlurb(app.cleanupLevel))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Voice commands").font(.headline)
+                Text("Murmur types what you say. These let it act on what " +
+                     "you say instead — it can't tell whether you meant a " +
+                     "command or just said the words.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                toggleRow(
+                    title: "Spoken edits",
+                    detail: "Off by default. When on, saying \"scratch that\" " +
+                            "or \"never mind\" edits or discards what you just " +
+                            "dictated — which can fire when you only meant to " +
+                            "say those words.",
+                    isOn: Binding(
+                        get: { app.spokenEdits },
+                        set: { app.setSpokenEdits($0) }))
+                Divider()
+                toggleRow(
+                    title: "Spoken layout",
+                    detail: "Saying \"new line\" or \"new paragraph\" inserts a " +
+                            "break. Turn off if you dictate those words literally.",
+                    isOn: Binding(
+                        get: { app.spokenLayout },
+                        set: { app.setSpokenLayout($0) }))
+                Divider()
+                toggleRow(
+                    title: "Spoken symbols",
+                    detail: "Off by default. When on, saying \"period\", " +
+                            "\"comma\", \"star\" or \"dash\" inserts the symbol " +
+                            "instead of the word. Your recognizer already " +
+                            "adds punctuation on its own.",
+                    isOn: Binding(
+                        get: { app.spokenSymbols },
+                        set: { app.setSpokenSymbols($0) }))
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1187,6 +1319,27 @@ struct SettingsPage: View {
                         Text("7 days").tag(7)
                         Text("30 days").tag(30)
                         Text("90 days").tag(90)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep how many transcripts")
+                        Text("Oldest are dropped as new dictations arrive.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { app.historyLimit },
+                        set: { app.setHistoryLimit($0) })) {
+                        Text("50").tag(50)
+                        Text("100").tag(100)
+                        Text("250").tag(250)
+                        Text("500").tag(500)
+                        Text("1000").tag(1000)
                     }
                     .labelsHidden()
                     .fixedSize()
@@ -1229,6 +1382,12 @@ struct SettingsPage: View {
     /// timer re-evaluates continuously while this page is open.
     private func refreshWhisperModelDownloaded() {
         whisperModelDownloaded = app.whisperEngine.isModelDownloaded(app.whisperModel)
+    }
+
+    /// Blurbs come from the shared cleanup-stop enum; `resolve` clamps any
+    /// persisted Int so a garbage value still renders the default stop.
+    private func cleanupStopBlurb(_ level: Int) -> String {
+        CleanupLevel.resolve(level).blurb
     }
 
     private var pickerLocaleIDs: [String] {
@@ -1434,6 +1593,390 @@ struct SnippetsPage: View {
         // snippet's expansion text while the user is mid-retype of its
         // trigger (e.g. selected-all-deleted the field to type a new one).
         SnippetStore.save(snippets)
+    }
+}
+
+// MARK: - My Voice
+
+struct MyVoicePage: View {
+    @ObservedObject var app: AppDelegate
+    @ObservedObject var voiceStore: VoiceInstructionStore
+    @State private var editingPreset: VoiceInstruction?
+    @State private var editingIsNew = false
+    @State private var pendingDelete: VoiceInstruction?
+    @State private var showDeleteConfirm = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("My Voice")
+                    .font(.system(size: 30, weight: .medium))
+                Spacer()
+                Button {
+                    newPreset()
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Palette.accent)
+                }
+                .buttonStyle(.plain)
+                .help("New preset")
+            }
+            .padding(.top, 24)
+            Text("Presets rewrite your dictations before they're inserted — " +
+                 "your phrasing, enforced everywhere you talk.")
+                .foregroundStyle(.secondary)
+
+            if voiceStore.instructions.isEmpty {
+                emptyState
+            } else {
+                presetList
+            }
+        }
+        .sheet(item: $editingPreset) { preset in
+            VoicePresetEditorView(
+                preset: preset,
+                isNew: editingIsNew,
+                onSave: { updated in
+                    if editingIsNew {
+                        voiceStore.add(updated)
+                    } else {
+                        voiceStore.update(updated)
+                    }
+                    editingPreset = nil
+                },
+                onCancel: { editingPreset = nil })
+        }
+        .confirmationDialog(
+            "Delete \u{201C}\(pendingDelete?.name ?? "")\u{201D}?",
+            isPresented: $showDeleteConfirm,
+            presenting: pendingDelete) { preset in
+            Button("Delete Preset", role: .destructive) {
+                voiceStore.remove(id: preset.id)
+            }
+        } message: { preset in
+            Text("This permanently deletes \u{201C}\(preset.name)\u{201D}. " +
+                 "This can't be undone.")
+        }
+    }
+
+    private func newPreset() {
+        editingIsNew = true
+        editingPreset = VoiceInstruction(name: "", instructions: "")
+    }
+
+    // MARK: Empty state
+
+    /// Shown until the first preset exists: what My Voice does plus how a
+    /// preset gets activated — menu-bar quick-switcher or per-app bindings.
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "person.wave.2")
+                .font(.system(size: 28))
+                .foregroundStyle(Palette.accent)
+            Text("Murmur sounds like everyone. Fix that.")
+                .font(.headline)
+            Text("A preset is a standing instruction — \u{201C}tighten my phrasing\u{201D}, " +
+                 "\u{201C}always contractions\u{201D}, \u{201C}no exclamation marks\u{201D} — applied " +
+                 "to your dictations right before they're inserted.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text("Activate one from the menu-bar mic icon under My Voice, or " +
+                 "bind it to specific apps and it applies only while those apps " +
+                 "are frontmost.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                newPreset()
+            } label: {
+                Label("Create your first preset", systemImage: "plus.circle")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Palette.onInk)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Palette.ink, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 6)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .background(Palette.tint, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: Preset list
+
+    private var presetList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(voiceStore.instructions.enumerated()),
+                    id: \.element.id) { index, preset in
+                presetRow(preset)
+                if index != voiceStore.instructions.count - 1 {
+                    Divider().opacity(0.6)
+                }
+            }
+        }
+        .background(Palette.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Palette.border, lineWidth: 1))
+    }
+
+    private func presetRow(_ preset: VoiceInstruction) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preset.name.isEmpty ? "Untitled preset" : preset.name)
+                    .font(.body.weight(.medium))
+                Text(firstLine(of: preset.instructions))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(preset.appBundleIDs.isEmpty
+                    ? "All apps"
+                    : "\(preset.appBundleIDs.count) app" +
+                      "\(preset.appBundleIDs.count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { preset.isEnabled },
+                set: { enabled in
+                    var updated = preset
+                    updated.isEnabled = enabled
+                    voiceStore.update(updated)
+                }))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .fixedSize()
+                .help(preset.isEnabled ? "Enabled" : "Off")
+            Button {
+                editingIsNew = false
+                editingPreset = preset
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .help("Edit")
+            Button {
+                pendingDelete = preset
+                showDeleteConfirm = true
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Delete")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func firstLine(of text: String) -> String {
+        guard let line = text.components(separatedBy: .newlines)
+            .first(where: { !$0.isEmpty }) else {
+            return "No instructions yet"
+        }
+        return line
+    }
+}
+
+/// Create/edit sheet for one My Voice preset: name, freeform rewriting
+/// instructions with a placeholder hint, and per-app bindings.
+private struct VoicePresetEditorView: View {
+    let preset: VoiceInstruction
+    let isNew: Bool
+    let onSave: (VoiceInstruction) -> Void
+    let onCancel: () -> Void
+
+    @State private var name: String
+    @State private var instructions: String
+    @State private var appBundleIDs: [String]
+    // Cheap placeholders like StylePage's — NSWorkspace enumeration is an
+    // AppKit round-trip, so it's cached in @State on appear instead of
+    // re-running on every body evaluation.
+    @State private var runningAppsList: [(bundleID: String, name: String)] = []
+    @State private var manualBundleID = ""
+
+    init(preset: VoiceInstruction, isNew: Bool,
+         onSave: @escaping (VoiceInstruction) -> Void,
+         onCancel: @escaping () -> Void) {
+        self.preset = preset
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _name = State(initialValue: preset.name)
+        _instructions = State(initialValue: preset.instructions)
+        _appBundleIDs = State(initialValue: preset.appBundleIDs)
+    }
+
+    private static let instructionsHint =
+        "e.g. Tighten my phrasing. Always contractions. No exclamation " +
+        "marks. Keep lists as bullets."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(isNew ? "New Preset" : "Edit Preset",
+                  systemImage: isNew ? "plus.circle" : "pencil")
+                .font(.headline)
+
+            TextField("Preset name", text: $name)
+                .textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Instructions").font(.subheadline.weight(.medium))
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $instructions)
+                        .font(.system(size: 13))
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .frame(minHeight: 120)
+                        .background(Palette.panel,
+                                    in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .stroke(Palette.border, lineWidth: 1))
+                    if instructions.isEmpty {
+                        Text(Self.instructionsHint)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                }
+                Text("Applied to every matching dictation right before it's " +
+                     "inserted — Murmur rewrites what you dictated to follow " +
+                     "these rules.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Applies to").font(.subheadline.weight(.medium))
+                if appBundleIDs.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.grid.2x2")
+                            .foregroundStyle(.secondary)
+                        Text("All apps").font(.callout)
+                    }
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 240), spacing: 8)],
+                        alignment: .leading, spacing: 8) {
+                        ForEach(appBundleIDs, id: \.self) { bundleID in
+                            bindingChip(bundleID)
+                        }
+                    }
+                }
+                Text("With no bindings a preset applies everywhere; bound ones " +
+                     "apply only while that app is frontmost.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Menu {
+                        ForEach(runningAppsList, id: \.bundleID) { appInfo in
+                            Button(appInfo.name) { addBinding(appInfo.bundleID) }
+                                .disabled(appBundleIDs.contains(appInfo.bundleID))
+                        }
+                    } label: {
+                        Label("Add app…", systemImage: "plus")
+                    }
+                    .fixedSize()
+                    TextField("or paste a bundle ID, e.g. com.apple.Notes",
+                              text: $manualBundleID)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(addManual)
+                    Button("Add", action: addManual)
+                        .disabled(manualBundleID
+                            .trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button(isNew ? "Create Preset" : "Save Changes") {
+                    onSave(VoiceInstruction(
+                        id: preset.id,
+                        name: name.trimmingCharacters(in: .whitespaces),
+                        instructions: instructions,
+                        isEnabled: preset.isEnabled,
+                        appBundleIDs: appBundleIDs,
+                        createdAt: preset.createdAt))
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty ||
+                          instructions.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .onAppear(perform: refreshRunningApps)
+    }
+
+    private func bindingChip(_ bundleID: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "app")
+                .foregroundStyle(Palette.accent)
+            Text(Self.displayName(forBundleID: bundleID))
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button {
+                appBundleIDs.removeAll { $0 == bundleID }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Remove")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .stroke(Palette.border, lineWidth: 1))
+    }
+
+    private func addManual() {
+        addBinding(manualBundleID.trimmingCharacters(in: .whitespaces))
+        manualBundleID = ""
+    }
+
+    private func addBinding(_ bundleID: String) {
+        guard !bundleID.isEmpty, !appBundleIDs.contains(bundleID) else { return }
+        appBundleIDs.append(bundleID)
+    }
+
+    private func refreshRunningApps() {
+        runningAppsList = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { application in
+                guard let bundleID = application.bundleIdentifier,
+                      let name = application.localizedName else { return nil }
+                return (bundleID, name)
+            }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// Friendly app name for a stored bundle ID; falls back to the raw id
+    /// when no installed app matches (e.g. uninstalled or hand-typed).
+    static func displayName(forBundleID bundleID: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(
+               withBundleIdentifier: bundleID),
+           let bundle = Bundle(url: url),
+           let name = bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String
+               ?? bundle.infoDictionary?["CFBundleDisplayName"] as? String
+               ?? bundle.infoDictionary?["CFBundleName"] as? String,
+           !name.isEmpty {
+            return name
+        }
+        return bundleID
     }
 }
 

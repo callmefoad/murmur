@@ -1,11 +1,15 @@
 import AppKit
 import AVFoundation
+import Combine
 import Foundation
+import os
 import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
+    ObservableObject {
 
     enum UIState {
         case idle, recording, processing
@@ -19,26 +23,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var axTrusted = false
     @Published var hotkey: HotkeyMonitor.Hotkey = Settings.hotkey
     @Published var localeID: String = Settings.locale.identifier
-    @Published var lastError: String?
+    /// Every error surfaced anywhere in the app funnels through this
+    /// property, so `didSet` is the single choke point for posting the
+    /// matching user notification. The red caption in the window stays the
+    /// primary in-app surface; notifications cover the dashboard-closed case.
+    @Published var lastError: String? {
+        didSet {
+            guard let message = lastError else { return }
+            Notifier.postError(message)
+        }
+    }
     @Published var autoPeriod: Bool = Settings.autoPeriod
+    /// Opt-in: let "scratch that"/"never mind" edit or discard a dictation.
+    @Published var spokenEdits: Bool = Settings.spokenEdits
+    /// Whether "new line"/"new paragraph" become real breaks.
+    @Published var spokenLayout: Bool = Settings.spokenLayout
+    /// Opt-in: whether spoken symbol tokens ("comma", "star") convert.
+    @Published var spokenSymbols: Bool = Settings.spokenSymbols
+    @Published var liveCaptions: Bool = Settings.liveCaptions
     @Published var historyPaused: Bool = Settings.historyPaused
     @Published var historyRetentionDays: Int = Settings.historyRetentionDays
+    @Published var historyLimit: Int = Settings.historyLimit
+    /// Cleanup stop applied to every dictation: 0 Verbatim, 1 Cleaned,
+    /// 2 Polished (default), 3 Tightened.
+    @Published var cleanupLevel: Int = Settings.cleanupLevel
     @Published var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @Published var launchAtLoginNote: String?
     @Published var stats = LifetimeStats()
 
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
+    private let hud = DictationHUD.shared
     private let recorder = AudioRecorder()
     private let history = HistoryStore()
     private let statsStore = StatsStore()
+    let voiceStore = VoiceInstructionStore()
     private var transcriber = Transcriber(locale: Settings.locale)
     private lazy var hotkeyMonitor = HotkeyMonitor(hotkey: Settings.hotkey)
     let rewriteEngine = RewriteEngine()
+    /// Cleanup-stop polish failures degrade silently back to rules-only
+    /// output — this is their only trace, by design never a notification.
+    private static let cleanupLogger = Logger(
+        subsystem: "local.murmur", category: "cleanup")
     let whisperEngine = WhisperEngine()
     @Published var engine: String = Settings.engine
     @Published var whisperModel: String = Settings.whisperModel
     @Published var whisperReady = false
+    /// My Voice preset forced onto every dictation regardless of app
+    /// bindings. nil means no forcing — resolution falls through to the
+    /// store's per-app bindings. Persisted in Settings so the menu-bar
+    /// selection survives relaunches.
+    @Published var selectedVoicePresetID: UUID? = Settings.selectedVoicePresetID
     @Published var voiceProfile: VoiceProfile? = VoiceProfileStore.load()
     /// Guards against stacking multiple concurrent `LanguageModelSession`
     /// generations: without it, every dictation that lands while a refresh
@@ -51,6 +86,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Extra status line shown in the top bar while a transform runs.
     @Published var transformStatus: String?
 
+    /// Generation guard for `flashTransformStatus`: a delayed clear only
+    /// wins if no newer status landed since its flash began.
+    private var transformStatusGeneration = 0
+    private var cancellables = Set<AnyCancellable>()
+
+    /// Shows `message` in the top bar briefly, then clears it — used for
+    /// post-hoc confirmations like "✓ <preset>" once a voice rewrite lands.
+    private func flashTransformStatus(_ message: String) {
+        transformStatusGeneration += 1
+        let generation = transformStatusGeneration
+        transformStatus = message
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, generation == self.transformStatusGeneration else { return }
+            self.transformStatus = nil
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        HistoryStore.flushPendingWrites()
+        StatsStore.flushPendingWrites()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AudioRecorder.sweepStaleRecordings()
         AppPaths.secureExistingFiles()
@@ -58,6 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         statsStore.seed(from: history.entries)
         stats = statsStore.stats
         setUpStatusItem()
+        // Keep the menu-bar My Voice submenu in sync with preset edits made
+        // in the dashboard. objectWillChange fires before the mutation lands,
+        // so hop to the next main-queue turn to rebuild against final state.
+        voiceStore.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuildMenu() }
+            .store(in: &cancellables)
+        UNUserNotificationCenter.current().delegate =
+            NotifierPresentationDelegate.shared
+        // Mic level → HUD meter. The callback is already hopped to main.
+        recorder.onLevel = { [weak self] rms in
+            self?.hud.update(level: rms)
+        }
         refreshPermissions(promptAccessibility: true)
         wireHotkey()
         hotkeyMonitor.startMonitoring()
@@ -166,11 +237,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             newWindow.minSize = NSSize(width: 900, height: 600)
             newWindow.isReleasedWhenClosed = false
             newWindow.center()
+            restoreSavedFrame(of: newWindow)
+            // Delegate assigned after frame restoration so the windowDidMove
+            // fired by center()/setFrame can't rewrite the value just read.
+            newWindow.delegate = self
             window = newWindow
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         refreshPermissions()
+    }
+
+    /// Restores the persisted dashboard frame when it would land visibly on
+    /// at least one connected screen; otherwise keeps the centred default.
+    private func restoreSavedFrame(of window: NSWindow) {
+        guard let saved = Settings.dashboardWindowFrame else { return }
+        let frame = NSRectFromString(saved)
+        let usable = frame.width >= window.minSize.width
+            && frame.height >= window.minSize.height
+        guard usable, frameIsVisible(frame) else { return }
+        window.setFrame(frame, display: false)
+    }
+
+    /// True when the frame overlaps some screen's visible frame by enough to
+    /// remain usable — a one-pixel sliver counts as lost.
+    private func frameIsVisible(_ frame: NSRect) -> Bool {
+        NSScreen.screens.contains { screen in
+            let overlap = screen.visibleFrame.intersection(frame)
+            return overlap.width > 100 && overlap.height > 100
+        }
+    }
+
+    private func persistWindowFrame() {
+        guard let window else { return }
+        Settings.dashboardWindowFrame = NSStringFromRect(window.frame)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        persistWindowFrame()
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        persistWindowFrame()
     }
 
     // MARK: - Permissions
@@ -241,6 +349,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         autoPeriod = on
     }
 
+    func setSpokenEdits(_ on: Bool) {
+        Settings.spokenEdits = on
+        spokenEdits = on
+    }
+
+    func setSpokenLayout(_ on: Bool) {
+        Settings.spokenLayout = on
+        spokenLayout = on
+    }
+
+    func setSpokenSymbols(_ on: Bool) {
+        Settings.spokenSymbols = on
+        spokenSymbols = on
+    }
+
+    func setLiveCaptions(_ on: Bool) {
+        Settings.liveCaptions = on
+        liveCaptions = on
+        if !on { hud.hide() }
+    }
+
     func setHistoryPaused(_ on: Bool) {
         Settings.historyPaused = on
         historyPaused = on
@@ -252,6 +381,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         history.prune()
         entries = history.entries
         rebuildMenu()
+    }
+
+    func setHistoryLimit(_ limit: Int) {
+        Settings.historyLimit = limit
+        historyLimit = Settings.historyLimit
+        history.enforceLimit()
+        entries = history.entries
+        rebuildMenu()
+    }
+
+    func setCleanupLevel(_ level: Int) {
+        Settings.cleanupLevel = level
+        cleanupLevel = level
+    }
+
+    // MARK: History export
+
+    /// JSON of every stored transcript, same Codable shape as history.json.
+    func exportHistoryJSONData() throws -> Data {
+        try history.exportJSONData()
+    }
+
+    /// Markdown rendering of every stored transcript, one bullet each.
+    func exportHistoryMarkdown() -> String {
+        history.exportMarkdown()
     }
 
     /// Registers/unregisters Murmur as a login item via SMAppService. Note:
@@ -326,12 +480,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// Applies a user correction to a transcript and learns the
-    /// misheard → intended word mappings from it. Returns how many were learned.
+    /// misheard → intended word mappings from it. Returns how many were
+    /// learned. Async because the diff/merge work runs off the main actor.
     @discardableResult
-    func correctHistoryEntry(id: String, newText: String) -> Int {
+    func correctHistoryEntry(id: String, newText: String) async -> Int {
         guard let entry = history.entries.first(where: { $0.id == id }),
               entry.text != newText else { return 0 }
-        let learnedCount = LearnedStore.learn(original: entry.text, corrected: newText)
+        let learnedCount = await LearnedStore.learn(
+            original: entry.text, corrected: newText)
         history.update(id: id, text: newText)
         entries = history.entries
         rebuildMenu()
@@ -344,13 +500,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         try await transcriber.transcribe(fileAt: url)
     }
 
+    // MARK: - My Voice
+
+    func selectVoicePreset(_ id: UUID?) {
+        Settings.selectedVoicePresetID = id
+        selectedVoicePresetID = id
+        rebuildMenu()
+    }
+
+    /// Which My Voice instruction applies to this dictation, if any: a
+    /// forced selection (while still enabled) beats the store's first
+    /// enabled instruction bound to the target app. nil means the dictation
+    /// is inserted without voice rewriting.
+    func resolveVoiceInstruction(forApp bundleID: String?) -> VoiceInstruction? {
+        if let selectedVoicePresetID,
+           let forced = voiceStore.instructions.first(
+            where: { $0.id == selectedVoicePresetID }),
+           forced.isEnabled {
+            return forced
+        }
+        return voiceStore.preset(for: bundleID)
+    }
+
     /// Runs the user's chosen recognition engine. Dictation never waits on
     /// Whisper: while its model is still downloading or loading, Apple's
     /// engine handles the dictation, and Whisper takes over once ready.
     /// Whisper failures also fall back to Apple so a keypress always
     /// produces text.
     private func recognize(fileAt url: URL) async throws -> String {
-        let biasTerms = LearnedStore.biasTerms()
+        // Nonisolated async: the up-to-four-file vocabulary read runs off
+        // the main actor instead of stalling it before transcription starts.
+        let biasTerms = await LearnedStore.biasTerms()
         if Settings.engine == "whisper" {
             if whisperEngine.isReady(model: Settings.whisperModel) {
                 do {
@@ -373,6 +553,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Hotkey wiring
 
     private func wireHotkey() {
+        hotkeyMonitor.onUndoAttempt = { [weak self] in
+            guard let self else { return false }
+            return self.undoLastInsertionIfEligible()
+        }
         hotkeyMonitor.onStart = { [weak self] in
             DispatchQueue.main.async { self?.startRecording() }
         }
@@ -385,9 +569,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // `cancel()` finishes the buffer stream, so the streaming task
                 // returns on its own; cancelling it just drops the result.
                 self.recorder.cancel()
-                self.streamingTask?.cancel()
-                self.streamingTask = nil
-                self.uiState = .idle
+                 self.streamingTask?.cancel()
+                 self.streamingTask = nil
+                 self.hud.hide()
+                 self.uiState = .idle
             }
         }
         hotkeyMonitor.onHandsFreeChange = { [weak self] active in
@@ -401,6 +586,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var recordingStartedAt: Date?
     private var recordingTargetBundleID: String?
+    /// Most recent successful insertion, for hotkey-triggered undo.
+    private var lastInsertion: LastInsertion?
     /// Live transcription in flight, when `Settings.streamingTranscription`
     /// is on. Nil for the default file-based path.
     private var streamingTask: Task<String, Error>?
@@ -412,15 +599,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         Settings.streamingTranscription && Settings.engine != "whisper"
     }
 
+    /// Consumes a hotkey press as an undo when the last insertion is still
+    /// pending, inside the window, and this frontmost app is the app it went
+    /// into. Runs on the main thread straight from the monitor's state
+    /// machine, before any recording could start.
+    private func undoLastInsertionIfEligible() -> Bool {
+        guard let last = lastInsertion else { return false }
+        let action = InsertionTracker.action(
+            now: Date(), last: last,
+            frontAppBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            windowSeconds: InsertionTracker.windowSeconds)
+        guard action == .undo else { return false }
+        // Clear first so a failed mechanical undo can't loop on retry.
+        lastInsertion = nil
+        TextInserter.undo(last)
+        NSSound(named: "Tink")?.play()
+        return true
+    }
+
+    /// Skips for spoken edit commands: failures and stand-downs are worth a
+    /// breadcrumb, successes stay silent.
+    private static let editsLogger = Logger(
+        subsystem: "local.murmur", category: "edits")
+
+    /// Reverses the most recent insertion on behalf of a spoken edit command
+    /// ("scratch that", "delete last sentence"). Unlike the hotkey undo there
+    /// is no time window — any age within this session qualifies — but the
+    /// frontmost app must still be the one the text went into (unknown on
+    /// either side is forgiven), so a scratch never deletes another app's
+    /// text. With nothing recorded this logs and does nothing; callers skip
+    /// the insertion either way. No notification on success.
+    private func undoPendingInsertion(reason: String) {
+        guard let last = lastInsertion else {
+            Self.editsLogger.info(
+                "\(reason, privacy: .public): no pending insertion to undo")
+            return
+        }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        guard frontmost == nil || last.bundleID == nil || frontmost == last.bundleID
+        else {
+            Self.editsLogger.info(
+                "\(reason, privacy: .public): skipped — frontmost app changed since insertion")
+            return
+        }
+        // Clear first so a failed mechanical undo can't loop on retry.
+        lastInsertion = nil
+        TextInserter.undo(last)
+        NSSound(named: "Tink")?.play()
+    }
+
     private func startRecording() {
         guard uiState != .recording else { return }
         do {
             if streamingEnabled {
                 let started = try recorder.startStreaming()
-                let biasTerms = LearnedStore.biasTerms()
                 let transcriber = self.transcriber
+                transcriber.onPartialTranscript = { [weak self] text in
+                    DispatchQueue.main.async { self?.hud.update(caption: text) }
+                }
                 streamingTask = Task {
-                    try await transcriber.transcribe(
+                    // The vocabulary read touches several JSON files; fetch
+                    // it inside the task (off main via the nonisolated async
+                    // call) so key-down handling never waits on disk.
+                    let biasTerms = await LearnedStore.biasTerms()
+                    return try await transcriber.transcribe(
                         buffers: started.stream, inputFormat: started.format,
                         biasTerms: biasTerms)
                 }
@@ -433,7 +675,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             uiState = .recording
             lastError = nil
             NSSound(named: "Pop")?.play()
+            if Settings.liveCaptions { hud.show() }
         } catch {
+            hud.hide()
             lastError = "Could not start recording: \(error.localizedDescription)"
             NSSound(named: "Basso")?.play()
         }
@@ -459,6 +703,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func stopAndTranscribe() {
         isHandsFree = false
+        hud.hide()
         let streaming = streamingTask
         streamingTask = nil
         guard let url = recorder.stop() else {
@@ -482,29 +727,162 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 } else {
                     raw = try await recognize(fileAt: url)
                 }
-                var formatted = TextFormatter().format(raw)
-                formatted = LearnedStore.apply(in: formatted)
-                formatted = SnippetStore.expand(in: formatted)
+                // Regex passes plus the dictionary/learned/snippet JSON
+                // lookups are pure CPU+disk work over value types — run
+                // them off the main actor and await only the result. UI
+                // state below stays on the main actor untouched.
+                var formatted = await Task.detached(priority: .userInitiated) { () -> String in
+                    let formatter = TextFormatter(locale: Settings.locale)
+                    // Stop 0 keeps filler words and skips caps/period;
+                    // the dictionary and spoken layout commands stay
+                    // active at every stop — they are deliberate intents.
+                    // Spoken layout ("new line") is a deliberate intent at
+                    // every stop, verbatim included — but only while the
+                    // user leaves it on. Threaded explicitly so the
+                    // formatter stays a pure function of its arguments.
+                    let spokenLayout = Settings.spokenLayout
+                    // Spoken symbol tokens ("comma", "star", "dash") are a
+                    // separate opt-in, off by default: both recognizers
+                    // already punctuate, so the tokens are mostly redundant
+                    // while the false-positive rate on ordinary words is high.
+                    let spokenSymbols = Settings.spokenSymbols
+                    var text = CleanupLevel.resolve(Settings.cleanupLevel) == .verbatim
+                        ? formatter.formatVerbatim(
+                            raw, spokenLayout: spokenLayout,
+                            spokenSymbols: spokenSymbols)
+                        : formatter.format(
+                            raw, spokenLayout: spokenLayout,
+                            spokenSymbols: spokenSymbols)
+                    text = LearnedStore.apply(in: text)
+                    return SnippetStore.expand(in: text)
+                }.value
 
-                // Per-app style: rewrite tone on-device (Apple Intelligence).
-                let style = StyleSettings.style(forBundleID: targetBundleID)
-                if let instructions = style.instructions,
-                   !formatted.isEmpty,
-                   rewriteEngine.isAvailable {
-                    transformStatus = "Applying \(style.displayName) style…"
+                // Spoken edit commands ("scratch that", "delete last
+                // sentence") act on the cleaned text before any model pass:
+                // an utterance about to scratch itself should never pay for
+                // a rewrite, and the delete command needs to know what the
+                // previous insertion was. SpeechEdits owns all decisions;
+                // this is purely their application.
+                // ...and only when the user asked for them. Off (the
+                // default) the transcript is never scanned for command
+                // phrases at all, so saying "sorry, I meant Tuesday" or
+                // "never mind the second option" inserts those words
+                // instead of deleting the dictation.
+                let editPlan = SpeechEdits.gatedPlan(
+                    currentTranscript: formatted,
+                    previousText: lastInsertion?.text,
+                    enabled: Settings.spokenEdits)
+                if let replacement = editPlan.combinedReplacement {
+                    undoPendingInsertion(reason: "delete last sentence")
+                    formatted = replacement
+                } else {
+                    switch editPlan.outcome {
+                    case .discardAll:
+                        undoPendingInsertion(reason: "scratch command")
+                        uiState = .idle
+                        return
+                    case .replaceCurrent(let remainder):
+                        formatted = remainder
+                    case .none:
+                        break
+                    }
+                }
+
+                // My Voice presets win over Style rules for the same
+                // insertion: a forced or app-bound instruction rewrites
+                // instead of the style, never on top of it. A rewrite
+                // failure keeps the formatted text and reports via
+                // lastError — the dictation itself is never dropped.
+                let voiceInstruction = resolveVoiceInstruction(
+                    forApp: targetBundleID)
+                if let voice = voiceInstruction,
+                    !formatted.isEmpty,
+                    rewriteEngine.isAvailable {
+                    transformStatus = "Applying \(voice.name)…"
                     do {
                         let rewritten = try await rewriteEngine.rewrite(
-                            formatted, instructions: instructions)
-                        if !rewritten.isEmpty {
-                            formatted = rewritten
+                            formatted, voiceInstructions: voice.instructions)
+                        // The model saw the user's own speech. If it came
+                        // back as something that is no longer recognizably
+                        // that dictation, the preset lost control of it —
+                        // keep the rules-only text rather than insert a
+                        // hijacked rewrite.
+                        if let accepted = RewriteEngine.acceptedRewrite(
+                            original: formatted, rewritten: rewritten,
+                            profile: .freeform, context: "my-voice") {
+                            formatted = accepted
+                            // Brief confirmation that this insertion was
+                            // rewritten by the active preset, reusing the
+                            // top-bar transformStatus caption.
+                            flashTransformStatus("✓ \(voice.name)")
+                        } else {
+                            transformStatus = nil
                         }
                     } catch {
-                        // Don't fail silently: the Style setting would look
-                        // on but simply stop applying past some length with
-                        // no indication why.
-                        lastError = "Style wasn't applied: \(error.localizedDescription)"
+                        lastError = "\(voice.name) wasn't applied: " +
+                            "\(error.localizedDescription)"
+                        transformStatus = nil
                     }
-                    transformStatus = nil
+                } else {
+                    // Per-app style: rewrite tone on-device (Apple
+                    // Intelligence). Only reached when no voice preset
+                    // resolved for this insertion.
+                    let style = StyleSettings.style(forBundleID: targetBundleID)
+                    if let instructions = style.instructions,
+                       !formatted.isEmpty,
+                       rewriteEngine.isAvailable {
+                        transformStatus = "Applying \(style.displayName) style…"
+                        do {
+                            let rewritten = try await rewriteEngine.rewrite(
+                                formatted, instructions: instructions)
+                            // A tone change must still be the same
+                            // sentence; anything else is the model having
+                            // followed the transcript instead of the style.
+                            if let accepted = RewriteEngine.acceptedRewrite(
+                                original: formatted, rewritten: rewritten,
+                                profile: .preserving, context: "style") {
+                                formatted = accepted
+                            }
+                        } catch {
+                            // Don't fail silently: the Style setting would look
+                            // on but simply stop applying past some length with
+                            // no indication why.
+                            lastError = "Style wasn't applied: \(error.localizedDescription)"
+                        }
+                        transformStatus = nil
+                    } else if let instructions =
+                                CleanupLevel.resolve(Settings.cleanupLevel)
+                                    .polishInstructions,
+                               !formatted.isEmpty,
+                               rewriteEngine.isAvailable {
+                        // Cleanup stops 2/3: one light on-device model pass
+                        // after the rules. Reached only when neither a voice
+                        // preset nor an app Style claimed this insertion —
+                        // those replace the polish pass entirely. A failure
+                        // here degrades invisibly to rules-only output:
+                        // logged once, never notified, insertion proceeds.
+                        do {
+                            let polished = try await rewriteEngine.rewrite(
+                                formatted, instructions: instructions)
+                            // Same invisible degradation as a thrown
+                            // error: a rewrite that diverges implausibly
+                            // is dropped, the rules-only text is inserted,
+                            // and only the log records it. The user still
+                            // gets correct text, so no banner.
+                            let level = CleanupLevel.resolve(
+                                Settings.cleanupLevel)
+                            if let accepted = RewriteEngine.acceptedRewrite(
+                                original: formatted, rewritten: polished,
+                                profile: level == .tightened
+                                    ? .condensing : .preserving,
+                                context: "cleanup-\(level.rawValue)") {
+                                formatted = accepted
+                            }
+                        } catch {
+                            Self.cleanupLogger.error(
+                                "Polish pass failed, inserting rules-only text: \(String(describing: error), privacy: .public)")
+                        }
+                    }
                 }
                 if !formatted.isEmpty {
                     history.add(formatted, duration: duration)
@@ -522,7 +900,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     stats = statsStore.stats
                     refreshVoiceProfileIfDue()
                     if AXIsProcessTrusted() {
-                        TextInserter.insert(formatted)
+                        let outcome = TextInserter.insert(formatted)
+                        lastInsertion = LastInsertion(
+                            text: formatted, method: outcome.method, date: Date(),
+                            bundleID: NSWorkspace.shared.frontmostApplication?
+                                .bundleIdentifier ?? targetBundleID,
+                            replacedText: outcome.replacedText)
                     } else {
                         // Can't synthesize ⌘V without Accessibility — never
                         // fail silently: leave the transcript on the clipboard.
@@ -601,6 +984,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         menu.addItem(.separator())
+
+        let voiceItem = NSMenuItem(title: "My Voice", action: nil, keyEquivalent: "")
+        let voiceSubmenu = NSMenu()
+        let none = NSMenuItem(
+            title: "None (no rewriting)",
+            action: #selector(selectVoicePresetFromMenu(_:)), keyEquivalent: "")
+        none.target = self
+        none.state = selectedVoicePresetID == nil ? .on : .off
+        voiceSubmenu.addItem(none)
+        for instruction in voiceStore.instructions {
+            let item = NSMenuItem(
+                title: instruction.isEnabled
+                    ? instruction.name
+                    : "\(instruction.name) (off)",
+                action: #selector(selectVoicePresetFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = instruction.id.uuidString
+            item.isEnabled = instruction.isEnabled
+            item.state = selectedVoicePresetID == instruction.id ? .on : .off
+            voiceSubmenu.addItem(item)
+        }
+        voiceItem.submenu = voiceSubmenu
+        menu.addItem(voiceItem)
+
+        menu.addItem(.separator())
         let quit = NSMenuItem(
             title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
@@ -620,6 +1028,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(history.entries[sender.tag].text, forType: .string)
+    }
+
+    /// Menu-bar My Voice quick-switch. "None" carries no representedObject,
+    /// so an unparseable payload resolves to clearing the selection.
+    @objc private func selectVoicePresetFromMenu(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String,
+              let id = UUID(uuidString: identifier) else {
+            selectVoicePreset(nil)
+            return
+        }
+        selectVoicePreset(id)
     }
 }
 
@@ -680,6 +1099,67 @@ enum Settings {
         set { defaults.set(newValue, forKey: "autoPeriod") }
     }
 
+    /// How aggressively dictations are cleaned up: 0 Verbatim,
+    /// 1 Cleaned (default), 2 Polished, 3 Tightened.
+    ///
+    /// The unset default is deliberately the highest stop that runs NO
+    /// on-device model pass. Levels 2+ feed the transcript to the model,
+    /// and a user who never opted into that should never have their own
+    /// spoken words treated as instructions. Anyone who explicitly picked
+    /// a level keeps it — only the absent value moved.
+    static var cleanupLevel: Int {
+        get {
+            let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 1
+            return min(max(level, 0), 3)
+        }
+        set { defaults.set(newValue, forKey: "cleanupLevel") }
+    }
+
+    /// Spoken edit commands ("scratch that", "never mind", "delete last
+    /// sentence") acting on the finished dictation. OFF by default: those
+    /// are ordinary English phrases, and Murmur cannot tell a retraction
+    /// from someone simply saying the words, so an un-opted-in user must
+    /// never have text silently eaten. When false, `SpeechEdits` never
+    /// runs and the transcript passes through byte-for-byte.
+    static var spokenEdits: Bool {
+        get { defaults.object(forKey: "spokenEdits") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "spokenEdits") }
+    }
+
+    /// Spoken layout commands ("new line", "new paragraph") turning into
+    /// real breaks. ON by default — standard dictation behavior and the
+    /// only way to produce a paragraph by voice — but killable for anyone
+    /// who dictates those words literally. Additive only: it can insert a
+    /// break, never delete text.
+    static var spokenLayout: Bool {
+        get { defaults.object(forKey: "spokenLayout") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "spokenLayout") }
+    }
+
+    /// Spoken symbol tokens ("comma" -> ",", "star" -> "*", "dash" -> "-")
+    /// converting into glyphs. OFF by default: both recognition engines
+    /// already insert punctuation on their own, so the tokens are largely
+    /// redundant, while the false-positive rate on ordinary words like
+    /// "period", "star", "dash" and "colon" is high ("add a star there").
+    /// When false, `applySymbolsAndLayout` never runs and those words are
+    /// typed as spoken.
+    static var spokenSymbols: Bool {
+        get { defaults.object(forKey: "spokenSymbols") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "spokenSymbols") }
+    }
+
+    /// Floating live-caption/waveform HUD shown while dictating.
+    static var liveCaptions: Bool {
+        get { defaults.object(forKey: "liveCaptions") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "liveCaptions") }
+    }
+
+    /// Last-known dashboard window frame, encoded with `NSStringFromRect`.
+    static var dashboardWindowFrame: String? {
+        get { defaults.string(forKey: "dashboardWindowFrame") }
+        set { defaults.set(newValue, forKey: "dashboardWindowFrame") }
+    }
+
     /// When true, the dictation hotkey is swallowed via a session event tap
     /// so the frontmost app never sees it. Off by default: fn is also a live
     /// modifier (fn+arrows for Home/End, fn+Delete, fn+F-keys), and swallowing
@@ -699,6 +1179,33 @@ enum Settings {
     static var historyRetentionDays: Int {
         get { defaults.integer(forKey: "historyRetentionDays") }
         set { defaults.set(newValue, forKey: "historyRetentionDays") }
+    }
+
+    /// Maximum number of transcripts kept in History. Values outside
+    /// 10...1000 are clamped on both read and write; unset means 50.
+    static var historyLimit: Int {
+        get {
+            let raw = defaults.object(forKey: "historyLimit") as? Int ?? 50
+            return min(max(raw, 10), 1000)
+        }
+        set { defaults.set(min(max(newValue, 10), 1000), forKey: "historyLimit") }
+    }
+
+    /// UUID of the My Voice preset forced onto every dictation; nil means
+    /// no forced preset (per-app bindings still resolve normally).
+    static var selectedVoicePresetID: UUID? {
+        get {
+            guard let raw = defaults.string(forKey: "selectedVoicePresetID")
+            else { return nil }
+            return UUID(uuidString: raw)
+        }
+        set {
+            if let newValue {
+                defaults.set(newValue.uuidString, forKey: "selectedVoicePresetID")
+            } else {
+                defaults.removeObject(forKey: "selectedVoicePresetID")
+            }
+        }
     }
 
     static var locale: Locale {

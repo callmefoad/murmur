@@ -10,7 +10,17 @@ import Foundation
 /// - A warm always-on engine with a pre-roll ring buffer: wedged the engine
 ///   so recording never started.
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
+    /// Rebuilt for every recording. On macOS an `AVAudioEngine`'s input node
+    /// binds to whatever audio device was default when the node was first
+    /// instantiated, and it does not follow later changes — so a long-lived
+    /// engine keeps capturing from the built-in mic after you connect AirPods.
+    /// Constructing one is cheap (microseconds) and we already start and stop
+    /// per dictation, so a fresh engine each time is the reliable fix.
+    private var engine = AVAudioEngine()
+    /// Observes `AVAudioEngineConfigurationChange`, non-nil only while
+    /// recording. Fires when the input device disappears mid-dictation
+    /// (AirPods going out of range, a dock unplugged).
+    private var configurationObserver: NSObjectProtocol?
     private var file: AVAudioFile?
     /// Guards `file` and `streamContinuation`, both written on the caller's
     /// thread in `start()`/`stop()` but read (and, for the continuation,
@@ -65,6 +75,10 @@ final class AudioRecorder {
     /// `format` is the hardware input format the buffers are in — the caller
     /// is responsible for any conversion its consumer needs.
     func startStreaming() throws -> (stream: AsyncStream<AVAudioPCMBuffer>, format: AVAudioFormat) {
+        // Renew before reading the format: the old engine's format belongs to
+        // the old device, and handing a stale sample rate to the analyzer makes
+        // every transcription come back empty.
+        renewEngine()
         let format = engine.inputNode.outputFormat(forBus: 0)
         let (stream, continuation) = AsyncStream<AVAudioPCMBuffer>.makeStream(
             bufferingPolicy: .bufferingNewest(Self.streamBufferCount))
@@ -86,12 +100,14 @@ final class AudioRecorder {
     private func start(publishingBuffers: Bool) throws {
         guard !isRecording else { return }
 
+        if !publishingBuffers { renewEngine() }
+
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(
                 domain: "Murmur", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
+                userInfo: [NSLocalizedDescriptionKey: "No microphone input available. Check System Settings \u{203A} Sound \u{203A} Input."])
         }
 
         let url = FileManager.default.temporaryDirectory
@@ -125,7 +141,32 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         isRecording = true
+        observeConfigurationChanges()
     }
+
+    /// Discards the current engine and its device binding.
+    /// Only safe when no recording is in flight.
+    private func renewEngine() {
+        guard !isRecording else { return }
+        engine = AVAudioEngine()
+    }
+
+    /// The engine posts this when its input device is replaced or removed.
+    /// Mid-recording that means the audio we would keep capturing is either
+    /// silence or from the wrong device, so end the recording and let the
+    /// caller transcribe whatever was captured before the change.
+    private func observeConfigurationChanges() {
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine, queue: .main) { [weak self] _ in
+                guard let self, self.isRecording else { return }
+                self.onInputDeviceLost?()
+            }
+    }
+
+    /// Called on the main queue when the input device changes while recording.
+    /// Set once at launch, before any recording exists.
+    var onInputDeviceLost: (() -> Void)?
 
     /// Stops recording and returns the captured audio file URL,
     /// or nil if nothing was recorded.
@@ -135,6 +176,10 @@ final class AudioRecorder {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+        configurationObserver = nil
         let continuation = fileLock.withLock { () -> AsyncStream<AVAudioPCMBuffer>.Continuation? in
             file = nil
             let continuation = streamContinuation

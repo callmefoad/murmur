@@ -129,6 +129,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         recorder.onLevel = { [weak self] rms in
             self?.hud.update(level: rms)
         }
+        // The input device changed under us mid-dictation — AirPods dropping
+        // out, a dock unplugged. Everything captured after this point is
+        // silence or the wrong device, so finish now with what we have.
+        recorder.onInputDeviceLost = { [weak self] in
+            guard let self, self.recorder.isRecording else { return }
+            self.lastError = "Microphone changed during dictation \u{2014} "
+                + "stopping with what was captured."
+            self.stopAndTranscribe()
+        }
         refreshPermissions(promptAccessibility: true)
         wireHotkey()
         hotkeyMonitor.startMonitoring()

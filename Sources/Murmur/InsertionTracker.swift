@@ -81,18 +81,30 @@ enum InsertionTracker {
     }
 
     /// Seconds after an insertion during which a hotkey press undoes it.
-    /// Reads UserDefaults each call so it is tunable on a running install:
-    ///     defaults write local.murmur undoWindowSeconds -float 3
+    ///
+    /// Zero — the default — disables hotkey undo entirely, so consecutive
+    /// dictations always stack and a press can never remove text that is
+    /// already in the field. This is deliberate: the window cannot tell a
+    /// deliberate "undo that" from a fumbled key that ended the previous
+    /// dictation a moment too early, and guessing wrong destroys work the
+    /// user just spoke. Losing an undo shortcut costs one ⌘Z; guessing
+    /// wrong costs the whole dictation.
+    ///
+    /// Read from UserDefaults each call, so anyone who wants the behaviour
+    /// can opt back in on a running install:
+    ///     defaults write local.murmur undoWindowSeconds -float 2
     static var windowSeconds: TimeInterval {
-        UserDefaults.standard.object(forKey: "undoWindowSeconds") as? Double ?? 2.0
+        UserDefaults.standard.object(forKey: "undoWindowSeconds") as? Double ?? 0
     }
 
-    /// Undo wins only when an insertion is pending, it is still inside the
-    /// window, and the frontmost app is still the one the text went into.
+    /// Undo wins only when it is switched on at all, an insertion is
+    /// pending, it is still inside the window, and the frontmost app is
+    /// still the one the text went into.
     static func action(
         now: Date, last: LastInsertion?, frontAppBundleID: String?,
         windowSeconds: TimeInterval
     ) -> Action {
+        guard windowSeconds > 0 else { return .record }
         guard let last else { return .record }
         guard now.timeIntervalSince(last.date) < windowSeconds else { return .record }
         guard frontAppBundleID == last.bundleID else { return .record }

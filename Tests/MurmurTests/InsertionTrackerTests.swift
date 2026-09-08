@@ -64,6 +64,26 @@ final class InsertionTrackerTests: XCTestCase {
         XCTAssertEqual(action, .record)
     }
 
+    func testHotkeyUndoIsOffByDefault() {
+        UserDefaults.standard.removeObject(forKey: "undoWindowSeconds")
+        XCTAssertEqual(InsertionTracker.windowSeconds, 0)
+        // The press that would have undone under the old 2s default must now
+        // start a new recording, so dictations stack instead of erasing.
+        XCTAssertEqual(
+            InsertionTracker.action(
+                now: now, last: insertion(0.2), frontAppBundleID: "com.example.editor",
+                windowSeconds: InsertionTracker.windowSeconds),
+            .record)
+    }
+
+    func testZeroWindowNeverUndoes() {
+        XCTAssertEqual(
+            InsertionTracker.action(
+                now: now, last: insertion(0.0), frontAppBundleID: "com.example.editor",
+                windowSeconds: 0),
+            .record)
+    }
+
     func testCustomUserDefaultsWindowRespected() {
         UserDefaults.standard.set(10.0, forKey: "undoWindowSeconds")
         XCTAssertEqual(InsertionTracker.windowSeconds, 10.0)

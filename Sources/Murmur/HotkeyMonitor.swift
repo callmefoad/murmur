@@ -66,6 +66,7 @@ final class HotkeyMonitor {
     private var keyIsDown = false
     private var pressStartedAt: Date?
     private var lastTapEndedAt: Date?
+    private var secondPressIsPolished = false
 
     /// Presses shorter than this count as taps, not push-to-talk.
     private let tapThreshold: TimeInterval = 0.35
@@ -158,48 +159,63 @@ final class HotkeyMonitor {
 
     /// Edge detection + tap/hold state machine. Unchanged behaviour; only the
     /// event source differs between the tap and the NSEvent fallback.
-    private func apply(pressed: Bool) {
+    func apply(pressed: Bool, now: Date = Date()) {
         if pressed, !keyIsDown {
             keyIsDown = true
-            keyDown()
+            keyDown(at: now)
         } else if !pressed, keyIsDown {
             keyIsDown = false
-            keyUp()
+            keyUp(at: now)
         }
     }
 
-    private func keyDown() {
+    private func keyDown(at now: Date) {
+        // Make the natural gesture work: tap once, then hold the second
+        // press and speak. Arm Polished before onStart so that second press
+        // itself records in Polished mode; no third press is required.
+        if let lastTap = lastTapEndedAt,
+           now.timeIntervalSince(lastTap) <= doubleTapWindow {
+            lastTapEndedAt = nil
+            secondPressIsPolished = true
+            pressStartedAt = now
+            onPolishedRequested?()
+            onStart?()
+            return
+        }
+
+        secondPressIsPolished = false
         if onUndoAttempt?() == true {
             // The press undid the last insertion instead of dictating;
             // leave pressStartedAt nil so its key-up is a no-op.
             pressStartedAt = nil
             return
         }
-        pressStartedAt = Date()
+        pressStartedAt = now
         onStart?()
     }
 
-    private func keyUp() {
+    private func keyUp(at now: Date) {
         guard let startedAt = pressStartedAt else { return }
         pressStartedAt = nil
-        let holdDuration = Date().timeIntervalSince(startedAt)
+        let holdDuration = now.timeIntervalSince(startedAt)
 
         if holdDuration >= tapThreshold {
             // Push-to-talk: release ends dictation.
             lastTapEndedAt = nil
+            secondPressIsPolished = false
             onStop?()
             return
         }
 
-        // Both taps are discarded recordings; the second arms the next
-        // ordinary held dictation for model polish.
-        if let lastTap = lastTapEndedAt,
-           Date().timeIntervalSince(lastTap) <= doubleTapWindow {
-            lastTapEndedAt = nil
-            onPolishedRequested?()
+        if secondPressIsPolished {
+            // Two quick taps still work as the original "arm next hold"
+            // gesture. The second recording is discarded, then Polished is
+            // re-armed for the next hold.
+            secondPressIsPolished = false
             onCancel?()
+            onPolishedRequested?()
         } else {
-            lastTapEndedAt = Date()
+            lastTapEndedAt = now
             onCancel?()
         }
     }

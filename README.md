@@ -15,8 +15,9 @@ speech and language models, with an optional local Whisper engine.
 ## Features
 
 - **Two-speed dictation** — hold `fn` (or right ⌥) for instant rules-only
-  cleanup; double-tap to arm Polished, then hold normally for one tuned model
-  rewrite. The following dictation automatically returns to Fast.
+  cleanup; tap once, then hold the second press while speaking for one tuned
+  Polished rewrite. Two quick taps still arm the next hold. Murmur then
+  automatically returns to Fast.
 - **Undo** — off by default. A fumbled hotkey press that ended the previous
   dictation a moment early is indistinguishable from a deliberate "undo
   that", and guessing wrong destroys spoken work, so the shortcut stays

@@ -1406,9 +1406,9 @@ struct HelpPage: View {
                     "release. The cleaned-up text is pasted at your cursor.")
                 Divider()
                 helpRow("wand.and.sparkles", "Polished dictation",
-                    "Double-tap \(app.hotkey.displayName) to arm it, then hold the " +
-                    "key normally for one model-cleaned dictation. The following " +
-                    "dictation automatically returns to Fast.")
+                    "Tap \(app.hotkey.displayName), then hold the second press while " +
+                    "you speak for one model-cleaned dictation. Two quick taps also " +
+                    "arm the next hold. Murmur then returns to Fast.")
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +

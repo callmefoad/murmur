@@ -669,9 +669,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 profile: level == .tightened ? .condensing : .preserving,
                 context: forcePolished ? "double-tap-polished" :
                     "cleanup-\(level.rawValue)",
-                // A failure here degrades invisibly to rules-only output.
-                // The user still gets correct text, so no banner.
-                failureLabel: nil,
+                // An explicitly requested Polished pass must never fail
+                // invisibly; otherwise rules-only text looks like a broken
+                // gesture. Automatic cleanup still degrades silently.
+                failureLabel: forcePolished ? "Polished cleanup" : nil,
                 run: { try await engine.rewrite($0, instructions: instructions) })
         }
         return nil

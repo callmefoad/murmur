@@ -1108,6 +1108,16 @@ enum Settings {
         set { defaults.set(newValue, forKey: "autoPeriod") }
     }
 
+    /// Rejoins sentences the recognizer split at a breath rather than at a
+    /// real boundary ("the primary blender. Motor." -> "the primary
+    /// blender motor"). Punctuation repair only: the pass deletes a
+    /// period and lowercases the letter behind it, never touching words,
+    /// so it cannot reinterpret what was said. On by default.
+    static var joinFragments: Bool {
+        get { defaults.object(forKey: "joinFragments") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "joinFragments") }
+    }
+
     /// How aggressively dictations are cleaned up: 0 Verbatim,
     /// 1 Cleaned (default), 2 Polished, 3 Tightened.
     ///

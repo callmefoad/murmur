@@ -404,12 +404,21 @@ struct TextFormatter {
         _ raw: String,
         autoPeriod: Bool = Settings.autoPeriod,
         spokenLayout: Bool = Settings.spokenLayout,
-        spokenSymbols: Bool = Settings.spokenSymbols
+        spokenSymbols: Bool = Settings.spokenSymbols,
+        joinFragments: Bool = Settings.joinFragments
     ) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return "" }
 
         text = removeFillers(from: text)
+        // Deliberately this early: every period in the text is still one the
+        // recognizer produced. Run any later and the pass could delete
+        // punctuation the user dictated on purpose — a spoken "period", or a
+        // dictionary entry whose value is one — which would be exactly the
+        // kind of second-guessing this app must never do.
+        if joinFragments {
+            text = joinPauseFragments(in: text)
+        }
         if spokenLayout {
             text = applySpokenCommands(to: text)
         }
@@ -555,6 +564,257 @@ struct TextFormatter {
                 .subtracting(CharacterSet(charactersIn: "\t")))
     }
 
+    // MARK: - Pause-fragment joining
+
+    /// Apple's transcriber punctuates from prosody, so an ordinary breath
+    /// mid-sentence comes back as a sentence break: "Now it's the primary
+    /// blender. Motor. For the whole kitchen." Three sentences, one
+    /// of them a bare noun and one a bare prepositional phrase.
+    ///
+    /// This pass repairs those breaks and nothing else. It only ever
+    /// deletes a period and lowercases the letter that followed it — no
+    /// word is added, removed, reordered or reworded — so it cannot act on
+    /// what was said, only on how it was punctuated.
+    ///
+    /// Line structure is preserved: a deliberate "new line"/"new paragraph"
+    /// is a boundary no join crosses.
+    private func joinPauseFragments(in text: String) -> String {
+        text.components(separatedBy: "\n")
+            .map { Self.joinFragments(inLine: $0) }
+            .joined(separator: "\n")
+    }
+
+    /// Sentence openers that mark a continuation of the previous sentence.
+    /// Deliberately only pure coordinators: each can legitimately open a
+    /// sentence in edited prose, but a period in front of one in *dictation*
+    /// is nearly always a pause the recognizer punctuated.
+    private static let continuationOpeners: Set<String> = [
+        "and", "but", "or", "nor", "so", "yet", "plus", "because",
+    ]
+
+    /// Utterances that stand alone as a whole sentence, so a short verbless
+    /// one is deliberate rather than a stray fragment.
+    private static let standaloneUtterances: Set<String> = [
+        "yes", "no", "yeah", "yep", "nope", "okay", "ok", "sure", "right",
+        "exactly", "correct", "agreed", "true", "false", "maybe", "perhaps",
+        "thanks", "thank", "please", "sorry", "hi", "hello", "hey", "bye",
+        "nice", "great", "cool", "wow", "absolutely", "definitely", "done",
+        "congrats", "congratulations", "good", "bad", "same", "either",
+        "neither", "both", "anyway", "regardless", "understood", "noted",
+    ]
+
+    /// Words that routinely carry a sentence-ending period of their own, so
+    /// the break after them is an abbreviation, not a sentence boundary.
+    private static let abbreviations: Set<String> = [
+        "dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "vs", "etc",
+        "eg", "ie", "inc", "ltd", "co", "corp", "dept", "est", "approx",
+        "min", "max", "no", "vol", "fig", "al", "am", "pm", "us", "uk",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+        "oct", "nov", "dec", "mon", "tue", "tues", "wed", "thu", "thur",
+        "thurs", "fri", "sat", "sun",
+    ]
+
+    /// Finite verbs common enough in speech to settle the question cheaply.
+    /// The list only has to answer "does this clause have a verb at all",
+    /// and a miss is safe: an unrecognised verb means no join, which leaves
+    /// the text exactly as dictated.
+    private static let verbTokens: Set<String> = [
+        "am", "is", "are", "was", "were", "be", "been", "being", "aint",
+        "do", "does", "did", "done", "have", "has", "had", "having",
+        "can", "cant", "could", "will", "wont", "would", "shall", "should",
+        "may", "might", "must", "isnt", "arent", "wasnt", "werent",
+        "dont", "doesnt", "didnt", "hasnt", "havent", "hadnt", "couldnt",
+        "wouldnt", "shouldnt", "get", "gets", "got", "go", "goes", "went",
+        "make", "makes", "made", "say", "says", "said", "think", "thinks",
+        "know", "knows", "knew", "want", "wants", "need", "needs",
+        "like", "likes", "see", "sees", "saw", "take", "takes", "took",
+        "come", "comes", "came", "put", "puts", "let", "lets", "feel",
+        "feels", "felt", "look", "looks", "work", "works", "use", "uses",
+        "find", "finds", "found", "give", "gives", "gave", "tell", "tells",
+        "told", "ask", "asks", "try", "tries", "call", "calls", "keep",
+        "keeps", "kept", "start", "starts", "help", "helps", "seem",
+        "seems", "run", "runs", "ran", "move", "moves", "live", "lives",
+        "hope", "hopes", "love", "loves", "mean", "means", "meant",
+        "pay", "pays", "paid", "send", "sends", "sent", "read", "reads",
+        "write", "writes", "wrote", "buy", "buys", "bought", "sell",
+        "sells", "sold", "hit", "set", "sets", "leave", "leaves", "left",
+        "bring", "brings", "brought", "meet", "meets", "met", "wait",
+        "waits", "sign", "signs", "cover", "covers", "handle", "handles",
+        "run", "manage", "manages", "owe", "owes", "cost", "costs",
+    ]
+
+    /// Openers that leave a phrase stranded on the wrong side of a period.
+    private static let prepositionOpeners: Set<String> = [
+        "for", "with", "of", "at", "in", "on", "from", "by", "into", "onto",
+        "about", "over", "under", "through", "during", "between", "among",
+        "against", "toward", "towards", "across", "around", "per", "via",
+        "up", "down", "out", "off", "near", "to", "without", "within",
+        "upon", "besides", "beyond", "despite", "regarding", "than",
+    ]
+
+    /// A subject of its own makes a clause, and a clause can stand alone.
+    private static let subjectPronouns: Set<String> = [
+        "i", "we", "you", "he", "she", "they", "it",
+    ]
+
+    /// Stems whose "'s" is the verb "is", not a possessive.
+    private static let contractiblePronouns: Set<String> = [
+        "it", "that", "this", "there", "here", "he", "she", "what", "who",
+        "where", "when", "how", "why", "one", "everyone", "someone",
+        "something", "everything", "nothing", "nobody", "let", "he", "she",
+    ]
+
+    /// A clause with no finite verb is a fragment, so this is the test that
+    /// decides whether a sentence can stand on its own.
+    private static func isVerbLike(_ word: String) -> Bool {
+        let lower = word.lowercased()
+        if verbTokens.contains(lower) { return true }
+        if let mark = lower.firstIndex(where: { $0 == "'" || $0 == "\u{2019}" }) {
+            let stem = String(lower[lower.startIndex..<mark])
+            let suffix = String(lower[lower.index(after: mark)...])
+            // "'m", "'re", "'ve", "'ll", "'d" are only ever a verb.
+            if ["m", "re", "ve", "ll", "d"].contains(suffix) { return true }
+            // "'s" is a verb after a pronoun ("it's") and a possessive
+            // after a noun ("Sarah's").
+            if suffix == "s", contractiblePronouns.contains(stem) { return true }
+        }
+        // Participles and past tenses, length-guarded so short nouns that
+        // merely end in those letters ("bed", "ted", "ring") don't count.
+        if lower.count >= 5, lower.hasSuffix("ing") || lower.hasSuffix("ed") {
+            return true
+        }
+        return false
+    }
+
+    /// Lowercased words of a sentence, stripped of edge punctuation.
+    private static func wordTokens(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .map {
+                $0.trimmingCharacters(
+                    in: CharacterSet.alphanumerics.union(
+                        CharacterSet(charactersIn: "'\u{2019}-")).inverted)
+                    .lowercased()
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Splits a line after every period that is followed by whitespace,
+    /// keeping each period with the text before it and each run of
+    /// whitespace as that piece's trailing separator, so a line that is
+    /// left unjoined is reassembled byte for byte.
+    private static func periodPieces(_ line: String) -> [(text: String, separator: String)] {
+        let text = line as NSString
+        guard let regex = try? NSRegularExpression(pattern: "\\.[ \t]+") else {
+            return [(line, "")]
+        }
+        var pieces: [(text: String, separator: String)] = []
+        var start = 0
+        for match in regex.matches(
+            in: line, range: NSRange(location: 0, length: text.length)) {
+            let periodEnd = match.range.location + 1
+            pieces.append((
+                text: text.substring(with: NSRange(
+                    location: start, length: periodEnd - start)),
+                separator: text.substring(with: NSRange(
+                    location: periodEnd,
+                    length: match.range.location + match.range.length - periodEnd))))
+            start = match.range.location + match.range.length
+        }
+        pieces.append((text: text.substring(from: start), separator: ""))
+        return pieces
+    }
+
+    /// Whether the period between `previous` and `next` is a pause the
+    /// recognizer punctuated rather than a real sentence boundary.
+    static func shouldJoin(previous: String, next: String) -> Bool {
+        guard previous.hasSuffix("."), !next.isEmpty else { return false }
+        let stem = previous.dropLast()
+        // An ellipsis is deliberate; a decimal or an initial is not a
+        // sentence end at all.
+        guard let tail = stem.last, tail != "." else { return false }
+        guard let lastWord = Self.wordTokens(String(stem)).last else { return false }
+        guard lastWord.count > 1, !Self.abbreviations.contains(lastWord) else {
+            return false
+        }
+        // A recognizer that inserts a period capitalizes the word after it,
+        // so a lowercase opener means this break did not come from the
+        // recognizer's own punctuation and is none of our business.
+        guard let firstLetter = next.first(where: { $0.isLetter }),
+              firstLetter.isUppercase
+        else { return false }
+        let words = Self.wordTokens(next)
+        guard let opener = words.first else { return false }
+        guard !Self.standaloneUtterances.contains(opener) else { return false }
+        if Self.continuationOpeners.contains(opener) { return true }
+        // Otherwise the fragment has to have no finite verb and no subject
+        // of its own: both are marks of a clause that can stand alone, and
+        // "Best purchase this year." is a real sentence even though it has
+        // neither a verb nor a subject — which is why shape and length
+        // decide the rest.
+        guard !words.contains(where: Self.isVerbLike) else { return false }
+        guard !words.contains(where: Self.subjectPronouns.contains) else {
+            return false
+        }
+        if Self.prepositionOpeners.contains(opener) {
+            // A stranded phrase: "For the whole kitchen." It cannot be a
+            // sentence, so join it — but only while it is short enough to be
+            // one breath's worth, which keeps real preposition-initial
+            // sentences ("On Monday we review the numbers again.") intact.
+            return words.count <= 5
+        }
+        // A bare noun with nothing hanging off it: "Manager.",
+        // "The manager." Anything longer reads as a deliberate
+        // noun-phrase sentence and is left alone.
+        return words.count <= 2
+    }
+
+    /// Joins `next` onto `previous`, dropping the period between them and
+    /// lowercasing the letter it had capitalized.
+    static func joined(previous: String, next: String) -> String {
+        var opener = next
+        if let first = opener.first, first.isUppercase,
+           !Self.isIFamily(next), !Self.hasInteriorUppercase(next) {
+            opener.replaceSubrange(
+                opener.startIndex...opener.startIndex, with: first.lowercased())
+        }
+        return String(previous.dropLast()) + " " + opener
+    }
+
+    /// "I" and its contractions keep their capital wherever they land.
+    private static func isIFamily(_ text: String) -> Bool {
+        guard let word = text.split(whereSeparator: { $0 == " " || $0 == "\t" }).first
+        else { return false }
+        let letters = word.lowercased().prefix { $0.isLetter }
+        guard letters == "i" else { return false }
+        let rest = word.dropFirst(letters.count)
+        return rest.isEmpty || rest.first == "'" || rest.first == "\u{2019}"
+            || !rest.first!.isLetter
+    }
+
+    /// A token cased on purpose — iPhone, eBay, macOS — keeps its casing,
+    /// mirroring the protection in `capitalizeSentences`.
+    private static func hasInteriorUppercase(_ text: String) -> Bool {
+        guard let word = text.split(whereSeparator: { $0 == " " || $0 == "\t" }).first
+        else { return false }
+        return word.dropFirst().contains { $0.isUppercase }
+    }
+
+    static func joinFragments(inLine line: String) -> String {
+        let pieces = periodPieces(line)
+        guard pieces.count > 1 else { return line }
+        var result = pieces[0].text
+        var separator = pieces[0].separator
+        for piece in pieces.dropFirst() {
+            if shouldJoin(previous: result, next: piece.text) {
+                result = joined(previous: result, next: piece.text)
+            } else {
+                result += separator + piece.text
+            }
+            separator = piece.separator
+        }
+        return result + separator
+    }
+
     private func capitalizeSentences(in text: String) -> String {
         guard !text.isEmpty else { return text }
         var characters = Array(text)
@@ -620,7 +880,7 @@ struct TextFormatter {
         func check(_ formatter: TextFormatter, _ input: String, _ expected: String) {
             let got = formatter.format(
                 input, autoPeriod: true, spokenLayout: true,
-                spokenSymbols: true)
+                spokenSymbols: true, joinFragments: true)
             let ok = got == expected
             if !ok { passed = false }
             print("\(ok ? "PASS" : "FAIL"): \"\(input)\" -> \"\(got)\"" +

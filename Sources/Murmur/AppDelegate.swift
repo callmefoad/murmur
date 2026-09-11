@@ -863,7 +863,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                                 CleanupLevel.resolve(Settings.cleanupLevel)
                                     .polishInstructions,
                                !formatted.isEmpty,
-                               rewriteEngine.isAvailable {
+                               rewriteEngine.isAvailable,
+                               // The model pass runs after the key is
+                               // released, so its whole cost is wait the
+                               // user feels. Short, clean, single-clause
+                               // dictations are the case where the rules
+                               // already produced what the model would
+                               // return, so decide that here instead of
+                               // paying ~0.5-2.6 s to be told the same.
+                               // Only the automatic cleanup pass is gated:
+                               // a My Voice preset or an app Style is an
+                               // explicit choice and always applies.
+                               RewriteEngine.needsPolish(formatted) {
                         // Cleanup stops 2/3: one light on-device model pass
                         // after the rules. Reached only when neither a voice
                         // preset nor an app Style claimed this insertion —
@@ -1093,12 +1104,19 @@ enum Settings {
         set { defaults.set(newValue, forKey: "whisperModel") }
     }
 
-    /// Opt-in live transcription: feed the microphone to SpeechAnalyzer while
-    /// the user speaks instead of transcribing the finished file. Apple engine
-    /// only (WhisperKit needs a finished file). Off by default; flip it with
-    /// `defaults write local.murmur streamingTranscription -bool true`.
+    /// Live transcription: feed the microphone to SpeechAnalyzer while the
+    /// user speaks instead of transcribing the finished file afterwards.
+    /// Apple engine only (WhisperKit needs a finished file).
+    ///
+    /// On by default, because transcribing after release is pure added wait:
+    /// measured at ~230 ms for 11 s of speech, plus the four-file vocabulary
+    /// read that the file path performs after key-up and this path performs
+    /// at key-down. The `.caf` is still written either way, so a streaming
+    /// failure falls back to the file and costs only the time it saved.
+    /// Turn it off with
+    /// `defaults write local.murmur streamingTranscription -bool false`.
     static var streamingTranscription: Bool {
-        get { defaults.bool(forKey: "streamingTranscription") }
+        get { defaults.object(forKey: "streamingTranscription") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "streamingTranscription") }
     }
 

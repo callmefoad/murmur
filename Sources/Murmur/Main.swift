@@ -27,6 +27,9 @@ struct MurmurMain {
             case "--transform":
                 guard let text = arguments.next() else { usageAndExit() }
                 mode = .transform(text)
+            case "--needs-polish":
+                guard let text = arguments.next() else { usageAndExit() }
+                mode = .needsPolish(text)
             case "--selftest":
                 mode = .selftest
             case "--locale":
@@ -43,6 +46,12 @@ struct MurmurMain {
             let formatterPassed = TextFormatter.runSelfTest()
             let learnedPassed = LearnedStore.runSelfTest()
             exit(formatterPassed && learnedPassed ? 0 : 1)
+
+        case .needsPolish(let text):
+            // Debug aid for tuning the post-release latency gate: prints
+            // whether this text would pay for a model polish pass.
+            print(RewriteEngine.needsPolish(text) ? "MODEL" : "SKIP")
+            exit(0)
 
         case .format(let text):
             // Same pipeline as live dictation: format, apply learned
@@ -116,6 +125,7 @@ struct MurmurMain {
         case transcribe(String)
         case format(String)
         case transform(String)
+        case needsPolish(String)
         case selftest
     }
 
@@ -129,6 +139,7 @@ struct MurmurMain {
                                       [--locale en-US] [--engine apple|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
           Murmur --format "<text>"    run the text formatter on a string
+          Murmur --needs-polish "<t>" would this text pay for a model pass?
           Murmur --selftest           run formatter self-tests
         """)
         exit(0)

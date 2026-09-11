@@ -874,6 +874,13 @@ struct TextFormatter {
 
     // MARK: - Self test
 
+    /// Smoke test for the shipped binary, reachable as `Murmur --selftest`.
+    ///
+    /// Deliberately thin. The XCTest suite owns this formatter's edge cases
+    /// and runs against the test bundle; the only thing it cannot check is
+    /// that the pipeline inside a packaged, signed build still runs end to
+    /// end. So this is one case per pass, not a second copy of the suite.
+    /// When a case here fails, the unit tests are where to look.
     static func runSelfTest() -> Bool {
         var passed = true
 
@@ -887,98 +894,24 @@ struct TextFormatter {
                   (ok ? "" : " (expected \"\(expected)\")"))
         }
 
-        func checkReplacer(
-            _ entries: [(key: String, value: String)],
-            _ input: String, _ expected: String) {
-            let got = PhraseReplacer.replace(in: input, using: entries)
-            let ok = got == expected
-            if !ok { passed = false }
-            print("\(ok ? "PASS" : "FAIL"): replace(\"\(input)\") -> \"\(got)\"" +
-                  (ok ? "" : " (expected \"\(expected)\")"))
-        }
-
+        // "see plus plus" also proves the replacer matches terms whose edges
+        // are not word characters, which a hardcoded \b never would.
         let formatter = TextFormatter(dictionary: [
-            "jira": "Jira",
-            "claude code": "Claude Code",
-            // Literal "$" in the replacement: proves the replacement is
-            // spliced in verbatim and never read as a regex template.
-            // ("five dollars" itself is claimed by the amount pass.)
-            "five bucks": "cost is $5",
-            // Deliberately camelCased value: proves capitalizeSentences
-            // leaves an already-cased token alone at a sentence start.
-            "iphone": "iPhone",
-            // Normalization-style value: proves the dictionary still runs
-            // BEFORE capitalization, so a sentence start gets capitalized.
-            "gonna": "going to",
-            // Punctuation-only value: proves the dictionary still runs
-            // BEFORE tidying, so no stray space is left behind.
-            "period": ".",
-            // Non-word edges: \b would never have matched these.
-            "see plus plus": "C++",
+            "jira": "Jira", "see plus plus": "C++",
         ])
         let cases: [(input: String, expected: String)] = [
             ("um hello world", "Hello world."),
-            ("this is, uh, a test", "This is, a test."),
             ("first line new line second line", "First line\nSecond line."),
-            ("intro new paragraph details here", "Intro\n\nDetails here."),
             ("file a ticket in jira today", "File a ticket in Jira today."),
-            ("i use claude code daily", "I use Claude Code daily."),
-            ("hello world. this is fine", "Hello world. This is fine."),
-            ("  spaced   out   words ", "Spaced out words."),
-            ("already punctuated!", "Already punctuated!"),
-            ("", ""),
-            ("the five bucks total", "The cost is $5 total."),
-            ("iphone is great", "iPhone is great."),
-            ("gonna be late", "Going to be late."),
-            ("hello period", "Hello."),
             ("i love see plus plus", "I love C++"),
-            // Symbol tokens convert; spacing is tidied afterwards.
             ("hello comma world period", "Hello, world."),
-            // Bullets open items at utterance start / after a line break.
-            ("bullet buy milk new line bullet eggs", "- Buy milk\n- Eggs."),
-            // Amounts collapse on the cleaned stops.
             ("it costs fifty dollars", "It costs $50."),
-            ("seventy five cents each", "$0.75 each."),
-            ("fifty percent off", "50% off."),
-            ("two hundred fifty gigabytes free", "250 GB free."),
-            // Protected collocations keep their words.
-            ("a classic period piece film", "A classic period piece film."),
-            // The escape hatch emits the word form untouched.
-            ("say literally comma now", "Say comma now."),
+            ("  spaced   out   words ", "Spaced out words."),
+            ("", ""),
         ]
         for testCase in cases {
             check(formatter, testCase.input, testCase.expected)
         }
-
-        // A later entry must never rewrite what an earlier entry inserted.
-        check(
-            TextFormatter(dictionary: [
-                "jira ticket": "Jira ticket", "ticket": "TICKET",
-            ]),
-            "File a jira ticket today", "File a Jira ticket today.")
-
-        // Equal-length keys: the total ordering must give the same answer
-        // in every process, whatever the dictionary's hash seed happens
-        // to be. Run the binary repeatedly to confirm.
-        check(
-            TextFormatter(dictionary: [
-                "big apple": "NYC", "apple pie": "dessert",
-            ]),
-            "big apple pie", "NYC pie.")
-
-        // Terms with non-word edges must actually match.
-        checkReplacer(
-            [("see plus plus", "C++"), ("dot net", ".NET"), ("f sharp", "F#")],
-            "see plus plus and dot net and f sharp",
-            "C++ and .NET and F#")
-        checkReplacer([("C++", "C plus plus")], "I write C++ daily", "I write C plus plus daily")
-        checkReplacer([(".NET", "dotnet")], "the .NET runtime", "the dotnet runtime")
-        // Whole-word behaviour is preserved for ordinary terms.
-        checkReplacer([("cat", "dog")], "concatenate the cat", "concatenate the dog")
-        // Degenerate input.
-        checkReplacer([], "unchanged", "unchanged")
-        checkReplacer([("   ", "x")], "unchanged", "unchanged")
-
         return passed
     }
 }

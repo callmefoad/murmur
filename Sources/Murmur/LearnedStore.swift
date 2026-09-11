@@ -276,40 +276,21 @@ enum LearnedStore {
 
     // MARK: - Self test
 
+    /// Smoke test for the shipped binary. Thin on purpose: `LearnedStoreTests`
+    /// owns the diff's edge cases, the token cap and the interleave rules, and
+    /// even calls this function. All this needs to prove is that both run at
+    /// all inside a packaged build.
     static func runSelfTest() -> Bool {
-        let cases: [(original: String, corrected: String,
-                     expected: [(String, String)])] = [
-            ("Send it to Soren today.", "Send it to Søren today.",
-             [("Soren", "Søren")]),
-            ("The base ten pipeline is fast.", "The Baseten pipeline is fast.",
-             [("base ten", "Baseten")]),
-            ("Hello world.", "Hello world.", []),
-            ("I met so ren and Anna.", "I met Søren and Anna.",
-             [("so ren", "Søren")]),
-        ]
         var passed = true
-        for testCase in cases {
-            let got = extractCorrections(
-                original: testCase.original, corrected: testCase.corrected)
-            let ok = got.count == testCase.expected.count
-                && zip(got, testCase.expected).allSatisfy {
-                    $0.0.heard == $0.1.0 && $0.0.intended == $0.1.1
-                }
-            if !ok { passed = false }
-            print("\(ok ? "PASS" : "FAIL"): diff(\"\(testCase.original)\" → " +
-                  "\"\(testCase.corrected)\") = \(got)")
-        }
 
-        // A transcript past the token cap must bail out rather than
-        // allocate a huge LCS table.
-        let long = Array(repeating: "word", count: maxDiffTokens + 1)
-            .joined(separator: " ")
-        let capped = extractCorrections(original: long, corrected: long + " Søren")
-        if !capped.isEmpty { passed = false }
-        print("\(capped.isEmpty ? "PASS" : "FAIL"): diff over \(maxDiffTokens) " +
-              "tokens returns no pairs")
+        let got = extractCorrections(
+            original: "The base ten pipeline is fast.",
+            corrected: "The Baseten pipeline is fast.")
+        let diffed = got.count == 1
+            && got[0].heard == "base ten" && got[0].intended == "Baseten"
+        if !diffed { passed = false }
+        print("\(diffed ? "PASS" : "FAIL"): diff = \(got)")
 
-        // Interleaving must represent every source, not just the first.
         let mixed = interleave([["a1", "a2", "a3"], ["b1"], [], ["d1", "d2"]], limit: 300)
         let interleaved = mixed == ["a1", "b1", "d1", "a2", "d2", "a3"]
         if !interleaved { passed = false }

@@ -559,6 +559,126 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return try await transcriber.transcribe(fileAt: url, biasTerms: biasTerms)
     }
 
+
+    // MARK: - The one model pass a dictation gets
+
+    /// One on-device model pass over a finished transcript, plus what to do
+    /// with whatever comes back.
+    ///
+    /// A My Voice preset, a per-app Style and the automatic cleanup polish
+    /// do the same four steps and differ only in policy. Keeping that policy
+    /// in one value puts the three side by side instead of nested three deep,
+    /// each with its own copy of the same call.
+    private struct RewritePass {
+        /// Caption shown while the pass runs. Nil runs silently, and a
+        /// silent pass never touches `transformStatus` at all.
+        let announcement: String?
+        /// Caption flashed after a rewrite is accepted. Nil stays silent.
+        let confirmation: String?
+        /// How far the result may diverge before it is discarded.
+        let profile: RewriteEngine.RewriteProfile
+        /// Log label, so a discarded rewrite names the pass that made it.
+        let context: String
+        /// Prefix for a user-facing error. Nil logs instead of notifying,
+        /// which is right for a pass whose absence the user cannot see.
+        let failureLabel: String?
+        /// The call itself. My Voice takes a different `rewrite` overload.
+        let run: (String) async throws -> String
+    }
+
+    /// The single model pass this insertion gets, or nil for none.
+    ///
+    /// Precedence is deliberate and total: a My Voice preset replaces an app
+    /// Style, and either replaces the automatic cleanup polish. They never
+    /// stack, so one dictation is never rewritten twice.
+    ///
+    /// Only cleanup is gated on `needsPolish`. A preset or a Style is an
+    /// explicit choice by the user, so it applies however short the text.
+    /// Cleanup is automatic, so it has to earn the latency it costs.
+    private func rewritePass(
+        for text: String, targetBundleID: String?
+    ) -> RewritePass? {
+        guard !text.isEmpty, rewriteEngine.isAvailable else { return nil }
+        let engine = rewriteEngine
+
+        if let voice = resolveVoiceInstruction(forApp: targetBundleID) {
+            return RewritePass(
+                announcement: "Applying \(voice.name)…",
+                confirmation: "✓ \(voice.name)",
+                profile: .freeform,
+                context: "my-voice",
+                failureLabel: voice.name,
+                run: { try await engine.rewrite(
+                    $0, voiceInstructions: voice.instructions) })
+        }
+
+        let style = StyleSettings.style(forBundleID: targetBundleID)
+        if let instructions = style.instructions {
+            return RewritePass(
+                announcement: "Applying \(style.displayName) style…",
+                confirmation: nil,
+                profile: .preserving,
+                context: "style",
+                // Don't fail silently: the Style setting would look on but
+                // simply stop applying past some length with no reason given.
+                failureLabel: "Style",
+                run: { try await engine.rewrite($0, instructions: instructions) })
+        }
+
+        let level = CleanupLevel.resolve(Settings.cleanupLevel)
+        if let instructions = level.polishInstructions,
+           RewriteEngine.needsPolish(text) {
+            return RewritePass(
+                announcement: nil,
+                confirmation: nil,
+                profile: level == .tightened ? .condensing : .preserving,
+                context: "cleanup-\(level.rawValue)",
+                // A failure here degrades invisibly to rules-only output.
+                // The user still gets correct text, so no banner.
+                failureLabel: nil,
+                run: { try await engine.rewrite($0, instructions: instructions) })
+        }
+        return nil
+    }
+
+    /// Runs one pass and returns the text to insert.
+    ///
+    /// The model saw the user's own speech, so a result that is no longer
+    /// recognizably that dictation means the pass lost control of it: keep
+    /// the rules-only text and let the log record why. A thrown error
+    /// degrades the same way. Either way the dictation is never dropped.
+    private func applying(_ pass: RewritePass, to text: String) async -> String {
+        // Clear only a caption this pass actually set, so a silent pass
+        // cannot wipe a caption something else put there.
+        let announced = pass.announcement != nil
+        if announced { transformStatus = pass.announcement }
+        do {
+            let rewritten = try await pass.run(text)
+            guard let accepted = RewriteEngine.acceptedRewrite(
+                original: text, rewritten: rewritten,
+                profile: pass.profile, context: pass.context)
+            else {
+                if announced { transformStatus = nil }
+                return text
+            }
+            if let confirmation = pass.confirmation {
+                flashTransformStatus(confirmation)
+            } else if announced {
+                transformStatus = nil
+            }
+            return accepted
+        } catch {
+            if announced { transformStatus = nil }
+            if let label = pass.failureLabel {
+                lastError = "\(label) wasn't applied: \(error.localizedDescription)"
+            } else {
+                Self.cleanupLogger.error(
+                    "Polish pass failed, inserting rules-only text: \(String(describing: error), privacy: .public)")
+            }
+            return text
+        }
+    }
+
     // MARK: - Hotkey wiring
 
     private func wireHotkey() {
@@ -797,112 +917,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     }
                 }
 
-                // My Voice presets win over Style rules for the same
-                // insertion: a forced or app-bound instruction rewrites
-                // instead of the style, never on top of it. A rewrite
-                // failure keeps the formatted text and reports via
-                // lastError — the dictation itself is never dropped.
-                let voiceInstruction = resolveVoiceInstruction(
-                    forApp: targetBundleID)
-                if let voice = voiceInstruction,
-                    !formatted.isEmpty,
-                    rewriteEngine.isAvailable {
-                    transformStatus = "Applying \(voice.name)…"
-                    do {
-                        let rewritten = try await rewriteEngine.rewrite(
-                            formatted, voiceInstructions: voice.instructions)
-                        // The model saw the user's own speech. If it came
-                        // back as something that is no longer recognizably
-                        // that dictation, the preset lost control of it —
-                        // keep the rules-only text rather than insert a
-                        // hijacked rewrite.
-                        if let accepted = RewriteEngine.acceptedRewrite(
-                            original: formatted, rewritten: rewritten,
-                            profile: .freeform, context: "my-voice") {
-                            formatted = accepted
-                            // Brief confirmation that this insertion was
-                            // rewritten by the active preset, reusing the
-                            // top-bar transformStatus caption.
-                            flashTransformStatus("✓ \(voice.name)")
-                        } else {
-                            transformStatus = nil
-                        }
-                    } catch {
-                        lastError = "\(voice.name) wasn't applied: " +
-                            "\(error.localizedDescription)"
-                        transformStatus = nil
-                    }
-                } else {
-                    // Per-app style: rewrite tone on-device (Apple
-                    // Intelligence). Only reached when no voice preset
-                    // resolved for this insertion.
-                    let style = StyleSettings.style(forBundleID: targetBundleID)
-                    if let instructions = style.instructions,
-                       !formatted.isEmpty,
-                       rewriteEngine.isAvailable {
-                        transformStatus = "Applying \(style.displayName) style…"
-                        do {
-                            let rewritten = try await rewriteEngine.rewrite(
-                                formatted, instructions: instructions)
-                            // A tone change must still be the same
-                            // sentence; anything else is the model having
-                            // followed the transcript instead of the style.
-                            if let accepted = RewriteEngine.acceptedRewrite(
-                                original: formatted, rewritten: rewritten,
-                                profile: .preserving, context: "style") {
-                                formatted = accepted
-                            }
-                        } catch {
-                            // Don't fail silently: the Style setting would look
-                            // on but simply stop applying past some length with
-                            // no indication why.
-                            lastError = "Style wasn't applied: \(error.localizedDescription)"
-                        }
-                        transformStatus = nil
-                    } else if let instructions =
-                                CleanupLevel.resolve(Settings.cleanupLevel)
-                                    .polishInstructions,
-                               !formatted.isEmpty,
-                               rewriteEngine.isAvailable,
-                               // The model pass runs after the key is
-                               // released, so its whole cost is wait the
-                               // user feels. Short, clean, single-clause
-                               // dictations are the case where the rules
-                               // already produced what the model would
-                               // return, so decide that here instead of
-                               // paying ~0.5-2.6 s to be told the same.
-                               // Only the automatic cleanup pass is gated:
-                               // a My Voice preset or an app Style is an
-                               // explicit choice and always applies.
-                               RewriteEngine.needsPolish(formatted) {
-                        // Cleanup stops 2/3: one light on-device model pass
-                        // after the rules. Reached only when neither a voice
-                        // preset nor an app Style claimed this insertion —
-                        // those replace the polish pass entirely. A failure
-                        // here degrades invisibly to rules-only output:
-                        // logged once, never notified, insertion proceeds.
-                        do {
-                            let polished = try await rewriteEngine.rewrite(
-                                formatted, instructions: instructions)
-                            // Same invisible degradation as a thrown
-                            // error: a rewrite that diverges implausibly
-                            // is dropped, the rules-only text is inserted,
-                            // and only the log records it. The user still
-                            // gets correct text, so no banner.
-                            let level = CleanupLevel.resolve(
-                                Settings.cleanupLevel)
-                            if let accepted = RewriteEngine.acceptedRewrite(
-                                original: formatted, rewritten: polished,
-                                profile: level == .tightened
-                                    ? .condensing : .preserving,
-                                context: "cleanup-\(level.rawValue)") {
-                                formatted = accepted
-                            }
-                        } catch {
-                            Self.cleanupLogger.error(
-                                "Polish pass failed, inserting rules-only text: \(String(describing: error), privacy: .public)")
-                        }
-                    }
+                // At most one model pass, chosen by a precedence that lives
+                // in `rewritePass` rather than in nesting here.
+                if let pass = rewritePass(
+                    for: formatted, targetBundleID: targetBundleID) {
+                    formatted = await applying(pass, to: formatted)
                 }
                 if !formatted.isEmpty {
                     history.add(formatted, duration: duration)

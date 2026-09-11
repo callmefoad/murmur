@@ -50,6 +50,23 @@ enum Palette {
         NSColor(red: 0.40, green: 0.78, blue: 0.74, alpha: 1))
 }
 
+// MARK: - Card chrome
+
+extension View {
+    /// The standard settings card: full width, 20pt inset, rounded fill.
+    ///
+    /// Written out eleven times before this existed, which meant the corner
+    /// radius and the inset were eleven separate decisions that happened to
+    /// agree. A handful of cards still set their own padding or a minimum
+    /// height and are left inline, because they genuinely differ.
+    func card() -> some View {
+        self
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
 // MARK: - Pages
 
 enum Page: Hashable {
@@ -831,9 +848,7 @@ struct InsightsPage: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         }
     }
 
@@ -1133,9 +1148,7 @@ struct SettingsPage: View {
                     }
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Dictation").font(.headline)
@@ -1252,9 +1265,7 @@ struct SettingsPage: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Voice commands").font(.headline)
@@ -1291,9 +1302,7 @@ struct SettingsPage: View {
                         get: { app.spokenSymbols },
                         set: { app.setSpokenSymbols($0) }))
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Privacy").font(.headline)
@@ -1364,9 +1373,7 @@ struct SettingsPage: View {
                         .foregroundStyle(.orange)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         }
         .onAppear {
             loadLocales()
@@ -2029,9 +2036,7 @@ struct StylePage: View {
                     StyleSettings.defaultStyle = newValue
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Per-app styles").font(.headline)
@@ -2087,9 +2092,7 @@ struct StylePage: View {
                     .disabled(pickedBundleID.isEmpty)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         }
         .onAppear {
             defaultStyle = StyleSettings.defaultStyle
@@ -2165,9 +2168,7 @@ struct TransformsPage: View {
                     }
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Try it here").font(.headline)
@@ -2201,9 +2202,7 @@ struct TransformsPage: View {
                             .stroke(Palette.border, lineWidth: 1))
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         }
     }
 
@@ -2346,9 +2345,7 @@ struct TrainingPage: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Learned corrections").font(.headline)
@@ -2394,9 +2391,7 @@ struct TrainingPage: View {
                         .padding(.top, 4)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         }
         .onAppear { learned = LearnedStore.load() }
     }

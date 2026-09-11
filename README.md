@@ -16,8 +16,11 @@ speech and language models, with an optional local Whisper engine.
 
 - **Push-to-talk dictation** — hold `fn` (or right ⌥) anywhere; release to
   paste at your cursor. Double-tap for hands-free mode.
-- **Undo** — tap the hotkey again within ~2 s of an insertion to take it
-  back (window configurable via `undoWindowSeconds`).
+- **Undo** — off by default. A fumbled hotkey press that ended the previous
+  dictation a moment early is indistinguishable from a deliberate "undo
+  that", and guessing wrong destroys spoken work, so the shortcut stays
+  disabled and ⌘Z is the answer. Opt in with
+  `defaults write local.murmur undoWindowSeconds -float 2`.
 - **Live caption HUD** — optional floating capsule near your cursor shows a
   waveform meter and live partial text while you speak.
 - **Two recognition engines**, both offline:
@@ -32,6 +35,11 @@ speech and language models, with an optional local Whisper engine.
   paragraph", auto-capitalization, personal dictionary, snippets
   (say a trigger phrase → paste a saved block). Cleanup rules are
   locale-aware (English, Spanish, French, German, Italian, Portuguese).
+- **Cleanup levels** — Verbatim, Cleaned (rules only, no model), Polished
+  (default) and Tightened. Polished and above add one on-device model pass
+  that cleans up dictated speech in the owner's own register. Short, clean
+  dictations skip that pass entirely so they insert with no model latency;
+  see [docs/latency.md](docs/latency.md).
 - **My Voice presets** — write your own rewrite instructions ("tighten my
   phrasing, always contractions, no exclamation marks") and apply them to
   every dictation with the on-device model. Bind presets to specific apps,
@@ -40,8 +48,10 @@ speech and language models, with an optional local Whisper engine.
   `{{date}}`, `{{time}}`, `{{datetime}}`, and `{{clipboard}}` variables.
 - **Styles** — per-app tone rewriting (formal / casual / very casual) using
   Apple Intelligence's on-device model.
-- **Transforms** — select text in any app, press ⌥1 to polish grammar or ⌥2
-  to turn rough notes into a structured AI prompt, rewritten in place.
+- **Transforms** — select text in any app, press ⌃⌥1 to polish grammar or
+  ⌃⌥2 to turn rough notes into a structured AI prompt, rewritten in place.
+  Control+Option+digit is unmapped on the US layout, so nothing is typed
+  over the selection before the transform reads it.
 - **Dashboard** — history with search and correction-learning, usage stats
   (words, WPM, day streak), insights chart, a Voice Profile persona derived
   locally from what you dictate, scratchpad, and the My Voice preset editor.
@@ -89,6 +99,7 @@ restart of a running instance after each build.
 .build/debug/Murmur --transcribe audio.wav --engine whisper
 .build/debug/Murmur --format "um hello new line hi"     # cleanup pipeline only
 .build/debug/Murmur --transform "fix this grammer pls"  # on-device LLM polish
+.build/debug/Murmur --needs-polish "yeah that works"   # would this pay for a model pass?
 ```
 
 ## Privacy
@@ -108,12 +119,41 @@ Whisper engine):
 ```
 HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine
                                         ↓
-     TextFormatter → LearnedStore → SnippetStore → RewriteEngine (Styles)
+     TextFormatter → LearnedStore → SnippetStore → RewriteEngine (model)
                                         ↓
-                        TextInserter (clipboard + ⌘V)
+                     TextInserter (direct AX, clipboard + ⌘V fallback)
 ```
 
-See [PLAN.md](PLAN.md) for the original design document.
+`TextFormatter` is a pure function of its arguments: every gate that reads
+speech content is threaded in explicitly rather than read from settings
+inside it, so the whole rules pipeline is unit-testable. `RewriteEngine`
+runs only when `needsPolish` says the text would benefit, and it discards
+any rewrite that diverges too far from what was actually said.
+
+## Design documents
+
+- [PLAN.md](PLAN.md) — the original design document.
+- [docs/voice.md](docs/voice.md) — which parts of the owner's writing style
+  are guaranteed in code and which are only requested of the model, and why
+  the line falls where it does.
+- [docs/latency.md](docs/latency.md) — the measured cost of every stage
+  between key release and text appearing, what the defaults do about it, and
+  which optimizations were measured and rejected.
+
+## A note on reading this code
+
+Two constraints shape more of it than anything else, and changes that ignore
+them tend to be wrong:
+
+1. **Murmur must never act on the content of speech.** It transcribes,
+   cleans by rule, and pastes. A transcript containing "caveman mode" once
+   came back rewritten in caveman style: prompt injection where the injected
+   text is the user's own voice. Any feature that reads the transcript will
+   fire on words the user merely said, so it has to be gated and default
+   off. See the defences listed in [docs/voice.md](docs/voice.md).
+2. **A dictation must never erase or rewrite text already placed in another
+   app.** This rules out several otherwise attractive optimizations, which
+   is why they are recorded as rejected rather than missing.
 
 ## License
 

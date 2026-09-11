@@ -264,7 +264,10 @@ final class RewriteEngine {
         Do: fix punctuation, capitalization and clear mis-transcriptions. \
         Cut filler and false starts. When he corrects himself keep only the \
         correction. When he says a thing twice keep the better version \
-        once. Drop scaffolding he only said while assembling the sentence, \
+        once. Collapse repeated meaning too, even when he used different \
+        words for it. For example, "I thank you and I'm thankful for your \
+        help" becomes "Thank you for your help." Drop scaffolding he only \
+        said while assembling the sentence, \
         such as "what I'm trying to say is". Break run-on sentences and \
         keep paragraphs short. Keep his reasoning, not just his requests. \
         Keep contractions, and sentences that open with But, So, And, \
@@ -284,7 +287,9 @@ final class RewriteEngine {
         delve, robust or seamless. Never use em dashes or semicolons. \
         Never change his certainty: "I think we should" must not become \
         "We should". Never change a question into a statement. Never \
-        rewrite a sentence that was already fine.
+        rewrite a sentence that was already fine. Before returning, scan the \
+        result for clauses that convey the same idea and delete the weaker \
+        duplicate.
         """
 
     /// Pure builder for the CleanupLevel polish session framing — exposed

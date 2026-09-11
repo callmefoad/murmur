@@ -27,6 +27,9 @@ struct MurmurMain {
             case "--transform":
                 guard let text = arguments.next() else { usageAndExit() }
                 mode = .transform(text)
+            case "--polish":
+                guard let text = arguments.next() else { usageAndExit() }
+                mode = .polish(text)
             case "--needs-polish":
                 guard let text = arguments.next() else { usageAndExit() }
                 mode = .needsPolish(text)
@@ -76,6 +79,21 @@ struct MurmurMain {
                 exit(1)
             }
 
+        case .polish(let text):
+            let engine = RewriteEngine()
+            if let note = engine.availabilityNote {
+                FileHandle.standardError.write(Data("Unavailable: \(note)\n".utf8))
+                exit(1)
+            }
+            do {
+                let polished = try await engine.rewrite(
+                    text, instructions: RewriteEngine.polishPrompt(level: .tightened))
+                print(polished)
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Failed: \(error)\n".utf8))
+                exit(1)
+            }
         case .transcribe(let path):
             do {
                 let raw: String
@@ -125,6 +143,7 @@ struct MurmurMain {
         case transcribe(String)
         case format(String)
         case transform(String)
+        case polish(String)
         case needsPolish(String)
         case selftest
     }
@@ -139,6 +158,7 @@ struct MurmurMain {
                                       [--locale en-US] [--engine apple|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
           Murmur --format "<text>"    run the text formatter on a string
+          Murmur --polish "<text>"    run the tap-then-hold model cleanup
           Murmur --needs-polish "<t>" would this text pay for a model pass?
           Murmur --selftest           run formatter self-tests
         """)

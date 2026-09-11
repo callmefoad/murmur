@@ -1407,8 +1407,9 @@ struct HelpPage: View {
                 Divider()
                 helpRow("wand.and.sparkles", "Polished dictation",
                     "Tap \(app.hotkey.displayName), then hold the second press while " +
-                    "you speak for one model-cleaned dictation. Two quick taps also " +
-                    "arm the next hold. Murmur then returns to Fast.")
+                    "you speak. Murmur turns false starts, repetition, and jumbled " +
+                    "speech into your finished thought. Two quick taps also arm the " +
+                    "next hold, then Murmur returns to Fast.")
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +

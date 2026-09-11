@@ -659,8 +659,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 run: { try await engine.rewrite($0, instructions: instructions) })
         }
 
+        // The explicit tap-then-hold gesture means "take your time and turn
+        // this spoken draft into my finished thought", not merely proofread
+        // it. Use the reconstruction prompt and its matching divergence
+        // profile while keeping the user-facing name Polished.
         let level: CleanupLevel = forcePolished
-            ? .polished : CleanupLevel.resolve(Settings.cleanupLevel)
+            ? .tightened : CleanupLevel.resolve(Settings.cleanupLevel)
         if let instructions = level.polishInstructions,
            forcePolished || RewriteEngine.needsPolish(text) {
             return RewritePass(

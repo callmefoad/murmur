@@ -1121,14 +1121,26 @@ enum Settings {
     /// How aggressively dictations are cleaned up: 0 Verbatim,
     /// 1 Cleaned (default), 2 Polished, 3 Tightened.
     ///
-    /// The unset default is deliberately the highest stop that runs NO
-    /// on-device model pass. Levels 2+ feed the transcript to the model,
-    /// and a user who never opted into that should never have their own
-    /// spoken words treated as instructions. Anyone who explicitly picked
-    /// a level keeps it — only the absent value moved.
+    /// The unset default is Polished, which DOES run the on-device model.
+    ///
+    /// It was Cleaned (model-free) until the owner supplied a written voice
+    /// guide and asked for the rewrite explicitly. That is a deliberate
+    /// trade, not a relaxation: the model pass is the only way to compress
+    /// a rambling dictation, and it is also the path that once turned a
+    /// dictation mentioning "caveman mode" into caveman speech. Four
+    /// independent defences stand between those facts, none of which is a
+    /// prompt asking the model to behave:
+    ///   1. the transcript is delimited as data, with lookalike tags
+    ///      neutralized, so it is never the conversational turn;
+    ///   2. `isPlausibleRewrite` discards output that diverges from the
+    ///      input in length, content-word recall, or precision;
+    ///   3. `introducedBannedPhrasing` discards output that reaches for
+    ///      vocabulary or punctuation the speaker did not use;
+    ///   4. every rejection degrades to the rules-only text, silently.
+    /// Set this to 1 to get the model out of the path entirely.
     static var cleanupLevel: Int {
         get {
-            let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 1
+            let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 2
             return min(max(level, 0), 3)
         }
         set { defaults.set(newValue, forKey: "cleanupLevel") }

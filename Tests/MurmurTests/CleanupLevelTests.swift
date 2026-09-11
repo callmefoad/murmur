@@ -51,13 +51,31 @@ final class CleanupLevelTests: XCTestCase {
     /// The unset default must be the highest stop that runs no on-device
     /// model pass. A user who never opted in must never have their own
     /// spoken words fed to a model that could read them as instructions.
-    func testSettingsDefaultsToCleanedWhenUnset() {
+    /// The default moved from Cleaned to Polished when the owner supplied a
+    /// written voice guide and asked for the rewrite. The model is therefore
+    /// in the default path now, so what this test pins is the thing that
+    /// makes that safe: the guards, not the absence of the model.
+    func testSettingsDefaultsToPolishedWhenUnset() {
         UserDefaults.standard.removeObject(forKey: "cleanupLevel")
-        XCTAssertEqual(Settings.cleanupLevel, 1)
+        XCTAssertEqual(Settings.cleanupLevel, 2)
+        XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .polished)
+        let prompt = CleanupLevel.resolve(Settings.cleanupLevel).polishInstructions
+        XCTAssertNotNil(prompt)
+        // The default prompt must still forbid the model from treating the
+        // transcript as something addressed to it.
+        let lowered = try! XCTUnwrap(prompt).lowercased()
+        XCTAssertTrue(lowered.contains("return only the cleaned text"))
+        XCTAssertTrue(lowered.contains("not a request directed at you"))
+    }
+
+    /// Level 1 stays available as the way out of the model path entirely.
+    func testCleanedRemainsModelFree() {
+        UserDefaults.standard.set(1, forKey: "cleanupLevel")
         XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .cleaned)
         XCTAssertNil(
             CleanupLevel.resolve(Settings.cleanupLevel).polishInstructions,
-            "the default stop must not invoke the on-device model")
+            "Cleaned must never invoke the on-device model")
+        UserDefaults.standard.removeObject(forKey: "cleanupLevel")
     }
 
     /// An explicit choice survives the default move.
@@ -93,24 +111,25 @@ final class CleanupLevelTests: XCTestCase {
         XCTAssertNotNil(CleanupLevel.tightened.polishInstructions)
     }
 
-    func testPolishedPromptMentionsKeepingWordsAndTone() throws {
+    func testPolishedPromptPreservesVoiceAndForbidsAdditions() throws {
         let prompt = try XCTUnwrap(CleanupLevel.polished.polishInstructions)
         let lowered = prompt.lowercased()
-        XCTAssertTrue(lowered.contains("words"))
-        XCTAssertTrue(lowered.contains("tone"))
-        XCTAssertTrue(lowered.contains("meaning"))
-        XCTAssertTrue(lowered.contains("never add"))
-        XCTAssertFalse(lowered.contains("tighten"),
-                       "Polished must be the light pass, not the condensing one")
+        XCTAssertTrue(lowered.contains("same personality"))
+        XCTAssertTrue(lowered.contains("keep contractions"))
+        XCTAssertTrue(lowered.contains("add content of any kind"))
+        XCTAssertTrue(lowered.contains("change his certainty"))
+        XCTAssertFalse(
+            lowered.contains("compress, do not summarize"),
+            "Polished must be the light pass, not the condensing one")
     }
 
-    func testTightenedPromptMentionsTighteningAndRedundancy() throws {
+    func testTightenedPromptReconstructsWithoutSummarizing() throws {
         let prompt = try XCTUnwrap(CleanupLevel.tightened.polishInstructions)
         let lowered = prompt.lowercased()
-        XCTAssertTrue(lowered.contains("tighten"))
-        XCTAssertTrue(lowered.contains("redundancy"))
-        XCTAssertTrue(lowered.contains("rambling"))
-        XCTAssertTrue(lowered.contains("never add"))
+        XCTAssertTrue(lowered.contains("compress, do not summarize"))
+        XCTAssertTrue(lowered.contains("repeated ideas"))
+        XCTAssertTrue(lowered.contains("constraint, number and qualifier"))
+        XCTAssertTrue(lowered.contains("add content of any kind"))
     }
 
     func testPolishPromptsAreDistinct() {

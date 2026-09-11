@@ -145,6 +145,12 @@ final class StatsStore {
         save()
     }
 
+    func clear() {
+        stats = LifetimeStats()
+        stats.seeded = true
+        save()
+    }
+
     /// One-time backfill from existing history so lifetime stats aren't
     /// empty on first launch after this store was introduced. Runs over the
     /// (already retention-pruned) surviving history entries, so it can

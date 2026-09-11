@@ -2,7 +2,7 @@
 
 Everything between releasing the key and seeing text is serial. This is the
 measured budget, taken on the owner's own machine (Apple Silicon, macOS 26,
-Apple engine, `cleanupLevel` 2), so the numbers below are the reason the
+Apple engine, forced Polished processing with `cleanupLevel` 2), so the numbers below are the reason the
 defaults are what they are. Re-measure before changing any of them.
 
 ## Measured stages

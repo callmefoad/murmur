@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import XCTest
 @testable import Murmur
@@ -44,45 +45,35 @@ final class TransformManagerTests: XCTestCase {
 
     // MARK: - Chord matching
 
-    /// Builds a synthetic key-down like the ones the CGEventTap delivers.
-    private func keyEvent(
-        _ keyCode: UInt16, _ modifiers: CGEventFlags
-    ) -> NSEvent {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)!
-        event.flags = modifiers
-        return NSEvent(cgEvent: event)!
-    }
-
     func testControlOptionDigitsMapToTheirTransforms() {
         XCTAssertEqual(
             TransformManager.matchingTransform(
-                for: keyEvent(UInt16(kVK_ANSI_1), [.maskControl, .maskAlternate]))?.id,
+                keyCode: UInt16(kVK_ANSI_1), modifiers: [.control, .option])?.id,
             "polish")
         XCTAssertEqual(
             TransformManager.matchingTransform(
-                for: keyEvent(UInt16(kVK_ANSI_2), [.maskControl, .maskAlternate]))?.id,
+                keyCode: UInt16(kVK_ANSI_2), modifiers: [.control, .option])?.id,
             "promptEngineer")
     }
 
     func testExactModifierMatchIsRequired() {
         // Adding command to the chord must NOT fire a transform…
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_ANSI_1), [.maskControl, .maskAlternate, .maskCommand])))
+            keyCode: UInt16(kVK_ANSI_1), modifiers: [.control, .option, .command]))
         // …and neither may any other substitution.
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_ANSI_1), [.maskControl, .maskShift])))
+            keyCode: UInt16(kVK_ANSI_1), modifiers: [.control, .shift]))
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_ANSI_1), [.maskCommand, .maskAlternate])))
+            keyCode: UInt16(kVK_ANSI_1), modifiers: [.command, .option]))
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_ANSI_1), [])))
+            keyCode: UInt16(kVK_ANSI_1), modifiers: []))
     }
 
     func testUnmappedKeysReturnNilEvenWithTheRightChord() {
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_ANSI_3), [.maskControl, .maskAlternate])))
+            keyCode: UInt16(kVK_ANSI_3), modifiers: [.control, .option]))
         XCTAssertNil(TransformManager.matchingTransform(
-            for: keyEvent(UInt16(kVK_Return), [.maskControl, .maskAlternate])))
+            keyCode: UInt16(kVK_Return), modifiers: [.control, .option]))
     }
 
     // MARK: - Initial state

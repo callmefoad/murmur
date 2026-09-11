@@ -390,7 +390,7 @@ final class RewriteEngineTests: XCTestCase {
     // MARK: - Default cleanup stop
 
     /// The default must not reach the on-device model at all.
-    func testDefaultCleanupLevelIsPolished() {
+    func testDefaultCleanupLevelIsCleaned() {
         let key = "cleanupLevel"
         let saved = UserDefaults.standard.object(forKey: key)
         defer {
@@ -399,12 +399,7 @@ final class RewriteEngineTests: XCTestCase {
         }
         UserDefaults.standard.removeObject(forKey: key)
 
-        XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .polished)
-        // The model is in the default path deliberately, so the framing that
-        // keeps the transcript as data has to be in the default prompt.
-        let prompt = CleanupLevel.polished.polishInstructions ?? ""
-        XCTAssertTrue(prompt.contains("not a request directed at you"))
-        // And Cleaned stays the model-free way out.
+        XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .cleaned)
         XCTAssertNil(CleanupLevel.cleaned.polishInstructions)
     }
 

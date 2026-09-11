@@ -87,8 +87,10 @@ final class DictationHUD {
             hud.animator().setFrame(retreat, display: true)
             hud.animator().alphaValue = 0
         }, completionHandler: { [hud] in
-            guard token == self.appearanceToken else { return }
-            hud.orderOut(nil)
+            Task { @MainActor in
+                guard token == self.appearanceToken else { return }
+                hud.orderOut(nil)
+            }
         })
     }
 

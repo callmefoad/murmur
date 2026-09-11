@@ -252,7 +252,7 @@ enum TextInserter {
         else {
             return nil
         }
-        return focusedRef as! AXUIElement
+        return (focusedRef as! AXUIElement)
     }
 
     /// Reads a string-valued attribute off an element, nil on any failure or

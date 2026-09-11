@@ -24,6 +24,7 @@ struct LearnedData: Codable {
 ///    before recognition (AnalysisContext contextual strings).
 enum LearnedStore {
     private static let logger = Logger(subsystem: "local.murmur", category: "learned")
+    private static let cache = PersistentCache<LearnedData>()
 
     static var fileURL: URL {
         AppPaths.supportDirectory.appendingPathComponent("learned.json")
@@ -34,8 +35,7 @@ enum LearnedStore {
             return LearnedData()
         }
         do {
-            let data = try Data(contentsOf: fileURL)
-            return try JSONDecoder().decode(LearnedData.self, from: data)
+            return try cache.load(from: fileURL)
         } catch {
             logger.error(
                 """
@@ -51,6 +51,7 @@ enum LearnedStore {
             let data = try JSONEncoder().encode(learned)
             try data.write(to: fileURL, options: .atomic)
             AppPaths.secure(fileURL)
+            cache.store(learned, for: fileURL)
         } catch {
             logger.error(
                 """
@@ -58,6 +59,10 @@ enum LearnedStore {
                 \(String(describing: error), privacy: .public)
                 """)
         }
+    }
+
+    static func clear() {
+        save(LearnedData())
     }
 
     // MARK: - Recording new knowledge

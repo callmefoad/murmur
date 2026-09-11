@@ -1,6 +1,8 @@
 import AVFAudio
 import Foundation
-import WhisperKit
+#if canImport(WhisperKit)
+@preconcurrency import WhisperKit
+#endif
 
 /// Murmur's optional "Precise" recognition engine: OpenAI's Whisper model
 /// running locally via WhisperKit (CoreML on the Neural Engine). Slower to
@@ -10,6 +12,14 @@ import WhisperKit
 /// The model downloads once into Application Support; recognition is offline.
 @MainActor
 final class WhisperEngine {
+
+    static let isAvailableInBuild: Bool = {
+        #if canImport(WhisperKit)
+        true
+        #else
+        false
+        #endif
+    }()
 
     static let availableModels: [(id: String, label: String)] = [
         ("base", "Base — fastest, ~150 MB"),
@@ -25,7 +35,9 @@ final class WhisperEngine {
     /// `defer { onStatus?(nil) }` in `pipeline(model:)` doesn't clear it.
     var onError: ((String) -> Void)?
 
+    #if canImport(WhisperKit)
     private var loadTask: Task<WhisperKit, Error>?
+    #endif
     private var loadedModel: String?
     /// Set only after the pipeline has fully loaded and prewarmed.
     private var readyModel: String?
@@ -37,11 +49,16 @@ final class WhisperEngine {
 
     /// True once the pipeline is loaded in memory and can transcribe now.
     func isReady(model: String) -> Bool {
+        #if canImport(WhisperKit)
         readyModel == model
+        #else
+        false
+        #endif
     }
 
     /// True once all model files exist locally (no download needed).
     func isModelDownloaded(_ model: String) -> Bool {
+        #if canImport(WhisperKit)
         guard let contents = try? FileManager.default.subpathsOfDirectory(
             atPath: modelsDirectory.path) else { return false }
         let required = ["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc",
@@ -52,13 +69,19 @@ final class WhisperEngine {
                     && $0.hasSuffix("coremldata.bin")
             }
         }
+        #else
+        false
+        #endif
     }
 
     /// Kicks off model load/download in the background.
     func preload(model: String) {
+        #if canImport(WhisperKit)
         Task { _ = try? await self.pipeline(model: model) }
+        #endif
     }
 
+    #if canImport(WhisperKit)
     private func pipeline(model: String) async throws -> WhisperKit {
         if loadedModel == model, let loadTask {
             return try await loadTask.value
@@ -108,6 +131,7 @@ final class WhisperEngine {
             throw error
         }
     }
+    #endif
 
     // MARK: - Language mapping
 
@@ -155,6 +179,7 @@ final class WhisperEngine {
     func transcribe(
         fileAt url: URL, model: String, localeID: String,
         biasTerms: [String]) async throws -> String {
+        #if canImport(WhisperKit)
         let pipe = try await pipeline(model: model)
 
         var options = DecodingOptions()
@@ -187,5 +212,10 @@ final class WhisperEngine {
             audioPath: url.path, decodeOptions: options)
         return results.map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        #else
+        throw NSError(domain: "Murmur", code: 41, userInfo: [
+            NSLocalizedDescriptionKey: "This Murmur build does not include Whisper.",
+        ])
+        #endif
     }
 }

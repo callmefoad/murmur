@@ -48,24 +48,13 @@ final class CleanupLevelTests: XCTestCase {
 
     // MARK: Settings clamp behaviour (UserDefaults, InsertionTracker-style)
 
-    /// The unset default must be the highest stop that runs no on-device
-    /// model pass. A user who never opted in must never have their own
-    /// spoken words fed to a model that could read them as instructions.
-    /// The default moved from Cleaned to Polished when the owner supplied a
-    /// written voice guide and asked for the rewrite. The model is therefore
-    /// in the default path now, so what this test pins is the thing that
-    /// makes that safe: the guards, not the absence of the model.
-    func testSettingsDefaultsToPolishedWhenUnset() {
+    /// Normal hold-to-talk stays model-free. Double-tap is the explicit
+    /// request for one Polished model pass.
+    func testSettingsDefaultsToCleanedWhenUnset() {
         UserDefaults.standard.removeObject(forKey: "cleanupLevel")
-        XCTAssertEqual(Settings.cleanupLevel, 2)
-        XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .polished)
-        let prompt = CleanupLevel.resolve(Settings.cleanupLevel).polishInstructions
-        XCTAssertNotNil(prompt)
-        // The default prompt must still forbid the model from treating the
-        // transcript as something addressed to it.
-        let lowered = try! XCTUnwrap(prompt).lowercased()
-        XCTAssertTrue(lowered.contains("return only the cleaned text"))
-        XCTAssertTrue(lowered.contains("not a request directed at you"))
+        XCTAssertEqual(Settings.cleanupLevel, 1)
+        XCTAssertEqual(CleanupLevel.resolve(Settings.cleanupLevel), .cleaned)
+        XCTAssertNil(CleanupLevel.resolve(Settings.cleanupLevel).polishInstructions)
     }
 
     /// Level 1 stays available as the way out of the model path entirely.

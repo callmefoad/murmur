@@ -120,10 +120,18 @@ final class TransformManager {
     /// `nonisolated static` so the event-tap callback (which is not on the
     /// main actor) can call it without hopping.
     nonisolated static func matchingTransform(for event: NSEvent) -> Transform? {
-        let modifiers = event.modifierFlags.intersection(
+        matchingTransform(keyCode: event.keyCode, modifiers: event.modifierFlags)
+    }
+
+    /// Pure matcher used by tests and the event adapter. Keeping CoreGraphics
+    /// event construction out of XCTest avoids a headless WindowServer stall.
+    nonisolated static func matchingTransform(
+        keyCode: UInt16, modifiers: NSEvent.ModifierFlags
+    ) -> Transform? {
+        let relevant = modifiers.intersection(
             [.command, .option, .control, .shift])
-        guard modifiers == [.control, .option] else { return nil }
-        return Transform.all.first(where: { $0.keyCode == event.keyCode })
+        guard relevant == [.control, .option] else { return nil }
+        return Transform.all.first(where: { $0.keyCode == keyCode })
     }
 
     func run(_ transform: Transform) {

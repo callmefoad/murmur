@@ -14,8 +14,9 @@ speech and language models, with an optional local Whisper engine.
 
 ## Features
 
-- **Push-to-talk dictation** — hold `fn` (or right ⌥) anywhere; release to
-  paste at your cursor. Double-tap for hands-free mode.
+- **Two-speed dictation** — hold `fn` (or right ⌥) for instant rules-only
+  cleanup; double-tap to arm Polished, then hold normally for one tuned model
+  rewrite. The following dictation automatically returns to Fast.
 - **Undo** — off by default. A fumbled hotkey press that ended the previous
   dictation a moment early is indistinguishable from a deliberate "undo
   that", and guessing wrong destroys spoken work, so the shortcut stays
@@ -35,8 +36,8 @@ speech and language models, with an optional local Whisper engine.
   paragraph", auto-capitalization, personal dictionary, snippets
   (say a trigger phrase → paste a saved block). Cleanup rules are
   locale-aware (English, Spanish, French, German, Italian, Portuguese).
-- **Cleanup levels** — Verbatim, Cleaned (rules only, no model), Polished
-  (default) and Tightened. Polished and above add one on-device model pass
+- **Cleanup levels** — Verbatim, Cleaned (default; rules only, no model),
+  Polished and Tightened. Polished and above add one on-device model pass
   that cleans up dictated speech in the owner's own register. Short, clean
   dictations skip that pass entirely so they insert with no model latency;
   see [docs/latency.md](docs/latency.md).
@@ -76,6 +77,10 @@ cd murmur
 ./scripts/make_app.sh     # builds build/Murmur.app and hot-swaps any
                           # running instance with the new build
 ```
+
+For a faster clean build with no WhisperKit dependency, build the Apple-only
+edition with `MURMUR_LITE=1 swift build -c release`. The app hides Whisper
+automatically; Apple on-device recognition remains fully functional.
 
 Optional: run `./scripts/make_signing_cert.sh` once to create a local
 self-signed signing certificate — this keeps macOS permission grants valid

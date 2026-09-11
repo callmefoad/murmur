@@ -3,7 +3,7 @@ import Foundation
 
 /// Watches the chosen modifier key globally.
 /// - Hold = push-to-talk (release stops).
-/// - Double-tap = hands-free toggle (tap again to stop).
+/// - Double-tap = arm the next held dictation for Polished cleanup.
 /// Requires Accessibility permission for global key monitoring.
 final class HotkeyMonitor {
 
@@ -39,7 +39,7 @@ final class HotkeyMonitor {
     var onStop: (() -> Void)?
     /// Called when a too-short press should be discarded.
     var onCancel: (() -> Void)?
-    var onHandsFreeChange: ((Bool) -> Void)?
+    var onPolishedRequested: (() -> Void)?
     /// Called first on each key-down; return true to consume the press as an
     /// undo — it never enters the tap/hold machine (no onStart, and the
     /// matching key-up is ignored). Deliberate trade-off: a fast double-tap
@@ -60,7 +60,6 @@ final class HotkeyMonitor {
     /// Convenience for the UI: true when the tap is active.
     var isConsuming: Bool { mode == .consuming }
 
-    private(set) var isHandsFree = false
     private var eventTap: EventTap?
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -170,15 +169,6 @@ final class HotkeyMonitor {
     }
 
     private func keyDown() {
-        if isHandsFree {
-            // Any press while hands-free stops the session.
-            isHandsFree = false
-            onHandsFreeChange?(false)
-            onStop?()
-            pressStartedAt = nil
-            lastTapEndedAt = nil
-            return
-        }
         if onUndoAttempt?() == true {
             // The press undid the last insertion instead of dictating;
             // leave pressStartedAt nil so its key-up is a no-op.
@@ -201,13 +191,13 @@ final class HotkeyMonitor {
             return
         }
 
-        // Short press: tap. Two taps in quick succession → hands-free.
+        // Both taps are discarded recordings; the second arms the next
+        // ordinary held dictation for model polish.
         if let lastTap = lastTapEndedAt,
            Date().timeIntervalSince(lastTap) <= doubleTapWindow {
             lastTapEndedAt = nil
-            isHandsFree = true
-            onHandsFreeChange?(true)
-            // Keep recording; it started on this key-down.
+            onPolishedRequested?()
+            onCancel?()
         } else {
             lastTapEndedAt = Date()
             onCancel?()

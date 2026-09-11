@@ -8,6 +8,25 @@ struct Snippet: Codable, Identifiable, Equatable {
     var trigger: String
     /// What gets inserted instead (exact casing preserved).
     var expansion: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, trigger, expansion
+    }
+
+    init(
+        id: UUID = UUID(), trigger: String, expansion: String
+    ) {
+        self.id = id
+        self.trigger = trigger
+        self.expansion = expansion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        trigger = try container.decode(String.self, forKey: .trigger)
+        expansion = try container.decode(String.self, forKey: .expansion)
+    }
 }
 
 /// Voice shortcuts: saying a trigger phrase mid-dictation inserts the saved
@@ -95,6 +114,7 @@ enum SnippetVariables {
 
 enum SnippetStore {
     private static let logger = Logger(subsystem: "local.murmur", category: "snippets")
+    private static let cache = PersistentCache<[Snippet]>()
 
     static var fileURL: URL {
         AppPaths.supportDirectory.appendingPathComponent("snippets.json")
@@ -103,8 +123,11 @@ enum SnippetStore {
     static func load() -> [Snippet] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         do {
+            if let cached = try? cache.load(from: fileURL) { return cached }
             let data = try Data(contentsOf: fileURL)
-            return try JSONDecoder().decode([Snippet].self, from: data)
+            let snippets = try JSONDecoder().decode(LossyArray<Snippet>.self, from: data).elements
+            cache.store(snippets, for: fileURL)
+            return snippets
         } catch {
             logger.error(
                 """
@@ -120,6 +143,7 @@ enum SnippetStore {
             let data = try JSONEncoder().encode(snippets)
             try data.write(to: fileURL, options: .atomic)
             AppPaths.secure(fileURL)
+            cache.store(snippets, for: fileURL)
         } catch {
             logger.error(
                 """
@@ -127,6 +151,10 @@ enum SnippetStore {
                 \(String(describing: error), privacy: .public)
                 """)
         }
+    }
+
+    static func clear() {
+        save([])
     }
 
     /// Where `{{clipboard}}` gets its text. Defaults to a synchronous

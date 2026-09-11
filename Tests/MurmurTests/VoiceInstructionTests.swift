@@ -65,12 +65,13 @@ final class VoiceInstructionTests: XCTestCase {
         XCTAssertEqual(decoded, instruction)
     }
 
-    /// Synthesized Codable has no tolerance for missing keys — stored JSON
-    /// without `id` must throw rather than silently mint a UUID.
     @MainActor
-    func testDecodingWithoutIdKeyThrows() {
+    func testDecodingLegacyPayloadUsesSafeDefaults() throws {
         let json = Data(#"{"name":"n","instructions":"i"}"#.utf8)
-        XCTAssertThrowsError(try JSONDecoder().decode([VoiceInstruction].self, from: json))
+        let decoded = try JSONDecoder().decode(VoiceInstruction.self, from: json)
+        XCTAssertEqual(decoded.name, "n")
+        XCTAssertTrue(decoded.isEnabled)
+        XCTAssertEqual(decoded.appBundleIDs, [])
     }
 
     // MARK: - Store CRUD + persistence

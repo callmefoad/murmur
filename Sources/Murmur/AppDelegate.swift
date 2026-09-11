@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     // Observable state for the dashboard window.
     @Published var uiState: UIState = .idle { didSet { updateIcon() } }
-    @Published var isHandsFree = false
+    @Published var isPolishedRecording = false
     @Published var entries: [HistoryEntry] = []
     @Published var micAuthorized = false
     @Published var axTrusted = false
@@ -42,10 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @Published var spokenSymbols: Bool = Settings.spokenSymbols
     @Published var liveCaptions: Bool = Settings.liveCaptions
     @Published var historyPaused: Bool = Settings.historyPaused
+    /// Session-only privacy mode. It intentionally resets to off on launch.
+    @Published var incognitoMode = false { didSet { updateIcon(); rebuildMenu() } }
     @Published var historyRetentionDays: Int = Settings.historyRetentionDays
     @Published var historyLimit: Int = Settings.historyLimit
     /// Cleanup stop applied to every dictation: 0 Verbatim, 1 Cleaned,
-    /// 2 Polished (default), 3 Tightened.
+    /// 2 Polished, 3 Tightened. Cleaned is the default; a double-tap of fn
+    /// arms Polished for the next held dictation without changing this setting.
     @Published var cleanupLevel: Int = Settings.cleanupLevel
     @Published var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @Published var launchAtLoginNote: String?
@@ -323,9 +326,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func setEngine(_ newEngine: String) {
-        Settings.engine = newEngine
-        engine = newEngine
-        if newEngine == "whisper" {
+        let resolved = newEngine == "whisper" && !WhisperEngine.isAvailableInBuild
+            ? "apple" : newEngine
+        Settings.engine = resolved
+        engine = resolved
+        if resolved == "whisper" {
             whisperEngine.preload(model: Settings.whisperModel)
         }
     }
@@ -382,6 +387,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func setHistoryPaused(_ on: Bool) {
         Settings.historyPaused = on
         historyPaused = on
+    }
+
+    func setIncognitoMode(_ on: Bool) {
+        incognitoMode = on
+    }
+
+    /// Removes personal text and learned behavior while keeping downloaded
+    /// speech models, app preferences, and permission grants intact.
+    func purgePersonalData() {
+        history.clear()
+        statsStore.clear()
+        LearnedStore.clear()
+        SnippetStore.clear()
+        voiceStore.clear()
+        VoiceProfileStore.clear()
+        StyleSettings.defaultStyle = .none
+        StyleSettings.overrides = [:]
+        Settings.selectedVoicePresetID = nil
+        selectedVoicePresetID = nil
+        voiceProfile = nil
+        entries = []
+        stats = statsStore.stats
+        for url in [
+            TextFormatter.dictionaryURL,
+            AppPaths.supportDirectory.appendingPathComponent("scratchpad.txt"),
+        ] {
+            try? FileManager.default.removeItem(at: url)
+        }
+        rebuildMenu()
     }
 
     func setHistoryRetentionDays(_ days: Int) {
@@ -596,7 +630,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// explicit choice by the user, so it applies however short the text.
     /// Cleanup is automatic, so it has to earn the latency it costs.
     private func rewritePass(
-        for text: String, targetBundleID: String?
+        for text: String, targetBundleID: String?, forcePolished: Bool = false
     ) -> RewritePass? {
         guard !text.isEmpty, rewriteEngine.isAvailable else { return nil }
         let engine = rewriteEngine
@@ -625,14 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 run: { try await engine.rewrite($0, instructions: instructions) })
         }
 
-        let level = CleanupLevel.resolve(Settings.cleanupLevel)
+        let level: CleanupLevel = forcePolished
+            ? .polished : CleanupLevel.resolve(Settings.cleanupLevel)
         if let instructions = level.polishInstructions,
-           RewriteEngine.needsPolish(text) {
+           forcePolished || RewriteEngine.needsPolish(text) {
             return RewritePass(
-                announcement: nil,
-                confirmation: nil,
+                announcement: forcePolished ? "Polishing dictation…" : nil,
+                confirmation: forcePolished ? "✓ Polished" : nil,
                 profile: level == .tightened ? .condensing : .preserving,
-                context: "cleanup-\(level.rawValue)",
+                context: forcePolished ? "double-tap-polished" :
+                    "cleanup-\(level.rawValue)",
                 // A failure here degrades invisibly to rules-only output.
                 // The user still gets correct text, so no banner.
                 failureLabel: nil,
@@ -704,11 +740,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                  self.uiState = .idle
             }
         }
-        hotkeyMonitor.onHandsFreeChange = { [weak self] active in
+        hotkeyMonitor.onPolishedRequested = { [weak self] in
             DispatchQueue.main.async {
-                self?.isHandsFree = active
+                self?.polishNextDictation = true
+                self?.transformStatus = "Polished armed — hold fn to dictate"
                 self?.updateIcon()
-                if active { NSSound(named: "Pop")?.play() }
             }
         }
     }
@@ -720,6 +756,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// Live transcription in flight, when `Settings.streamingTranscription`
     /// is on. Nil for the default file-based path.
     private var streamingTask: Task<String, Error>?
+    private var forcePolishedForCurrentDictation = false
+    private var polishNextDictation = false
 
     /// Live transcription only applies to Apple's SpeechAnalyzer — WhisperKit
     /// transcribes a finished file, so the Whisper engine always takes the
@@ -779,6 +817,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     private func startRecording() {
         guard uiState != .recording else { return }
+        forcePolishedForCurrentDictation = polishNextDictation
+        isPolishedRecording = polishNextDictation
+        polishNextDictation = false
         do {
             if streamingEnabled {
                 let started = try recorder.startStreaming()
@@ -831,7 +872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     private func stopAndTranscribe() {
-        isHandsFree = false
+        isPolishedRecording = false
         hud.hide()
         let streaming = streamingTask
         streamingTask = nil
@@ -846,8 +887,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         recordingStartedAt = nil
         let targetBundleID = recordingTargetBundleID
         recordingTargetBundleID = nil
+        let forcePolished = forcePolishedForCurrentDictation
+        forcePolishedForCurrentDictation = false
 
-        Task { [history, rewriteEngine] in
+        Task { [history] in
+            var telemetry = PipelineTelemetry()
+            var usedModel = false
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 let raw: String
@@ -856,6 +901,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 } else {
                     raw = try await recognize(fileAt: url)
                 }
+                telemetry.finish("recognize")
                 // Regex passes plus the dictionary/learned/snippet JSON
                 // lookups are pure CPU+disk work over value types — run
                 // them off the main actor and await only the result. UI
@@ -885,6 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     text = LearnedStore.apply(in: text)
                     return SnippetStore.expand(in: text)
                 }.value
+                telemetry.finish("rules")
 
                 // Spoken edit commands ("scratch that", "delete last
                 // sentence") act on the cleaned text before any model pass:
@@ -920,12 +967,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 // At most one model pass, chosen by a precedence that lives
                 // in `rewritePass` rather than in nesting here.
                 if let pass = rewritePass(
-                    for: formatted, targetBundleID: targetBundleID) {
+                    for: formatted, targetBundleID: targetBundleID,
+                    forcePolished: forcePolished) {
+                    usedModel = true
                     formatted = await applying(pass, to: formatted)
+                    telemetry.finish("model")
                 }
                 if !formatted.isEmpty {
-                    history.add(formatted, duration: duration)
-                    entries = history.entries
+                    if !incognitoMode {
+                        history.add(formatted, duration: duration)
+                        entries = history.entries
+                    }
                     // Stats are aggregate counters only (no transcript
                     // text), so pausing History — which is about not
                     // persisting transcripts to disk — shouldn't freeze
@@ -934,10 +986,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     // .first` would NOT be the new entry in that case;
                     // build the entry for stats directly from what was
                     // just dictated instead of reading it back off history.
-                    statsStore.record(
-                        HistoryEntry(text: formatted, date: Date(), duration: duration))
-                    stats = statsStore.stats
-                    refreshVoiceProfileIfDue()
+                    if !incognitoMode {
+                        statsStore.record(
+                            HistoryEntry(text: formatted, date: Date(), duration: duration))
+                        stats = statsStore.stats
+                        refreshVoiceProfileIfDue()
+                    }
                     if AXIsProcessTrusted() {
                         let outcome = TextInserter.insert(formatted)
                         lastInsertion = LastInsertion(
@@ -956,9 +1010,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                             "press ⌘V to paste it. Fix this in Settings."
                         NSSound(named: "Basso")?.play()
                     }
+                    telemetry.finish("persist+insert")
+                    telemetry.commit(
+                        wordCount: formatted.split(whereSeparator: \.isWhitespace).count,
+                        usedModel: usedModel, inserted: AXIsProcessTrusted())
                     rebuildMenu()
+                } else {
+                    telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 }
             } catch {
+                telemetry.finish("failed")
+                telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 lastError = "Transcription failed: \(error.localizedDescription)"
                 NSSound(named: "Basso")?.play()
             }
@@ -977,8 +1039,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private func updateIcon() {
         let symbol: String
         switch uiState {
-        case .idle: symbol = "mic"
-        case .recording: symbol = isHandsFree ? "mic.badge.plus" : "mic.fill"
+        case .idle:
+            symbol = incognitoMode ? "eye.slash" :
+                (polishNextDictation ? "wand.and.stars" : "mic")
+        case .recording: symbol = isPolishedRecording ? "wand.and.stars" : "mic.fill"
         case .processing: symbol = "hourglass"
         }
         statusItem.button?.image = NSImage(
@@ -1000,6 +1064,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
+        let polishHint = NSMenuItem(
+            title: polishNextDictation
+                ? "Polished armed — hold to dictate"
+                : "Double-tap to arm one Polished dictation",
+            action: nil, keyEquivalent: "")
+        polishHint.isEnabled = false
+        menu.addItem(polishHint)
+        let privateItem = NSMenuItem(
+            title: incognitoMode ? "Turn Off Incognito" : "Turn On Incognito",
+            action: #selector(toggleIncognitoFromMenu), keyEquivalent: "")
+        privateItem.target = self
+        privateItem.state = incognitoMode ? .on : .off
+        menu.addItem(privateItem)
         menu.addItem(.separator())
 
         if history.entries.isEmpty {
@@ -1062,6 +1139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         showMainWindow()
     }
 
+    @objc private func toggleIncognitoFromMenu() {
+        setIncognitoMode(!incognitoMode)
+    }
+
     @objc private func copyHistoryItem(_ sender: NSMenuItem) {
         guard sender.tag < history.entries.count else { return }
         let pasteboard = NSPasteboard.general
@@ -1087,6 +1168,7 @@ enum Settings {
     /// One-time import of preferences saved under the app's pre-rename
     /// bundle id (local.whisperflow). Call before anything reads Settings.
     static func migrateLegacyDefaults() {
+        migrateTwoSpeedDefault()
         guard defaults.object(forKey: "hotkey") == nil,
               defaults.object(forKey: "locale") == nil,
               let legacy = UserDefaults(suiteName: "local.whisperflow")
@@ -1097,6 +1179,17 @@ enum Settings {
                 defaults.set(value, forKey: key)
             }
         }
+    }
+
+    /// The previous release defaulted ordinary holds to Polished. Move that
+    /// default to Cleaned once; double-tap is now the explicit polished path.
+    private static func migrateTwoSpeedDefault() {
+        let marker = "didMigrateTwoSpeedDefault"
+        guard !defaults.bool(forKey: marker) else { return }
+        if defaults.object(forKey: "cleanupLevel") as? Int == 2 {
+            defaults.set(1, forKey: "cleanupLevel")
+        }
+        defaults.set(true, forKey: marker)
     }
 
     static var hotkey: HotkeyMonitor.Hotkey {
@@ -1158,13 +1251,9 @@ enum Settings {
     /// How aggressively dictations are cleaned up: 0 Verbatim,
     /// 1 Cleaned (default), 2 Polished, 3 Tightened.
     ///
-    /// The unset default is Polished, which DOES run the on-device model.
-    ///
-    /// It was Cleaned (model-free) until the owner supplied a written voice
-    /// guide and asked for the rewrite explicitly. That is a deliberate
-    /// trade, not a relaxation: the model pass is the only way to compress
-    /// a rambling dictation, and it is also the path that once turned a
-    /// dictation mentioning "caveman mode" into caveman speech. Four
+    /// The unset default is Cleaned. Double-tapping the dictation key requests
+    /// one Polished pass explicitly. The model path once turned a dictation
+    /// mentioning "caveman mode" into caveman speech, so four
     /// independent defences stand between those facts, none of which is a
     /// prompt asking the model to behave:
     ///   1. the transcript is delimited as data, with lookalike tags
@@ -1174,10 +1263,10 @@ enum Settings {
     ///   3. `introducedBannedPhrasing` discards output that reaches for
     ///      vocabulary or punctuation the speaker did not use;
     ///   4. every rejection degrades to the rules-only text, silently.
-    /// Set this to 1 to get the model out of the path entirely.
+    /// Normal hold-to-talk therefore stays model-free unless changed here.
     static var cleanupLevel: Int {
         get {
-            let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 2
+            let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 1
             return min(max(level, 0), 3)
         }
         set { defaults.set(newValue, forKey: "cleanupLevel") }

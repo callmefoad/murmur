@@ -31,6 +31,10 @@ enum VoiceProfileStore {
         }
     }
 
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     static func shouldRefresh(totalWords: Int) -> Bool {
         guard totalWords >= minimumWords else { return false }
         guard let existing = load() else { return true }

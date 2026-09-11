@@ -4,6 +4,7 @@ import Foundation
 /// commands, spacing/capitalization fixes, and personal-dictionary
 /// substitutions. Mirrors Wispr Flow's "AI edits" with local rules.
 struct TextFormatter {
+    private static let dictionaryCache = PersistentCache<[String: String]>()
 
     /// Filler words removed when they appear as standalone tokens
     /// (English; see `languageRules` for other languages).
@@ -386,10 +387,7 @@ struct TextFormatter {
     }
 
     static func loadDictionary() -> [String: String] {
-        guard let data = try? Data(contentsOf: dictionaryURL),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
-        return dict
+        (try? dictionaryCache.load(from: dictionaryURL)) ?? [:]
     }
 
     /// - Parameters:

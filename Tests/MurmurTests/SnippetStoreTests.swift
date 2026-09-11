@@ -45,11 +45,11 @@ final class SnippetStoreTests: XCTestCase {
 
     // MARK: - Snippet payload
 
-    /// Synthesized Codable has no tolerance for missing keys — a snippet
-    /// JSON without `id` must throw rather than silently mint a UUID.
-    func testDecodingWithoutIdKeyThrows() {
+    func testDecodingWithoutIdKeyMintsUUID() throws {
         let json = Data(#"{"trigger": "sig", "expansion": "Taylor"}"#.utf8)
-        XCTAssertThrowsError(try JSONDecoder().decode([Snippet].self, from: json))
+        let decoded = try JSONDecoder().decode(Snippet.self, from: json)
+        XCTAssertEqual(decoded.trigger, "sig")
+        XCTAssertEqual(decoded.expansion, "Taylor")
     }
 
     func testCodableRoundTripPreservesIdAndFields() throws {
@@ -98,6 +98,18 @@ final class SnippetStoreTests: XCTestCase {
     func testCorruptFileLoadsAsEmptyInsteadOfCrashing() throws {
         try Data("not json at all".utf8).write(to: SnippetStore.fileURL)
         XCTAssertEqual(SnippetStore.load(), [])
+    }
+
+    func testOneDamagedEntryDoesNotHideValidSnippets() throws {
+        let json = Data("""
+        [
+          {"trigger":"first","expansion":"ONE"},
+          {"trigger":17,"expansion":"BROKEN"},
+          {"trigger":"last","expansion":"THREE"}
+        ]
+        """.utf8)
+        try json.write(to: SnippetStore.fileURL, options: .atomic)
+        XCTAssertEqual(SnippetStore.load().map(\.trigger), ["first", "last"])
     }
 
     // MARK: - expand(in:)

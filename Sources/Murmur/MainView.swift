@@ -3,116 +3,6 @@ import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Palette (Murmur: warm paper, soft teal, adaptive light/dark)
-
-enum Palette {
-    private static func dynamic(_ light: NSColor, _ dark: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? dark : light
-        })
-    }
-
-    /// Warm backdrop behind the sidebar and panel.
-    static let shell = dynamic(
-        NSColor(red: 0.962, green: 0.954, blue: 0.940, alpha: 1),
-        NSColor(red: 0.125, green: 0.123, blue: 0.118, alpha: 1))
-    /// The main content sheet.
-    static let panel = dynamic(
-        .white,
-        NSColor(red: 0.168, green: 0.165, blue: 0.160, alpha: 1))
-    /// Cards on the sheet.
-    static let card = dynamic(
-        NSColor(red: 0.972, green: 0.965, blue: 0.952, alpha: 1),
-        NSColor(red: 0.208, green: 0.204, blue: 0.198, alpha: 1))
-    /// The promo banner — deep calm teal in both modes.
-    static let banner = dynamic(
-        NSColor(red: 0.078, green: 0.153, blue: 0.146, alpha: 1),
-        NSColor(red: 0.096, green: 0.176, blue: 0.168, alpha: 1))
-    /// Soft seafoam tint for callout cards.
-    static let tint = dynamic(
-        NSColor(red: 0.886, green: 0.938, blue: 0.925, alpha: 1),
-        NSColor(red: 0.157, green: 0.235, blue: 0.224, alpha: 1))
-    /// Primary text / filled buttons.
-    static let ink = dynamic(
-        NSColor(red: 0.13, green: 0.13, blue: 0.135, alpha: 1),
-        NSColor(red: 0.92, green: 0.92, blue: 0.90, alpha: 1))
-    /// Text on top of an ink-filled control.
-    static let onInk = dynamic(
-        .white,
-        NSColor(red: 0.11, green: 0.11, blue: 0.11, alpha: 1))
-    static let border = dynamic(
-        NSColor.black.withAlphaComponent(0.08),
-        NSColor.white.withAlphaComponent(0.12))
-    /// Murmur's accent: a soft teal.
-    static let accent = dynamic(
-        NSColor(red: 0.16, green: 0.55, blue: 0.52, alpha: 1),
-        NSColor(red: 0.40, green: 0.78, blue: 0.74, alpha: 1))
-}
-
-// MARK: - Card chrome
-
-extension View {
-    /// The standard settings card: full width, 20pt inset, rounded fill.
-    ///
-    /// Written out eleven times before this existed, which meant the corner
-    /// radius and the inset were eleven separate decisions that happened to
-    /// agree. A handful of cards still set their own padding or a minimum
-    /// height and are left inline, because they genuinely differ.
-    func card() -> some View {
-        self
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-// MARK: - Pages
-
-enum Page: Hashable {
-    case home, insights, dictionary, training, snippets, myVoice, style
-    case transforms, scratchpad
-    case settings, help
-
-    var label: String {
-        switch self {
-        case .home: return "Home"
-        case .insights: return "Insights"
-        case .dictionary: return "Dictionary"
-        case .training: return "Voice Training"
-        case .snippets: return "Snippets"
-        case .myVoice: return "My Voice"
-        case .style: return "Style"
-        case .transforms: return "Transforms"
-        case .scratchpad: return "Scratchpad"
-        case .settings: return "Settings"
-        case .help: return "Help"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .home: return "square.grid.2x2"
-        case .insights: return "chart.bar"
-        case .dictionary: return "text.book.closed"
-        case .training: return "waveform.badge.mic"
-        case .snippets: return "scissors"
-        case .myVoice: return "person.wave.2"
-        case .style: return "textformat"
-        case .transforms: return "wand.and.sparkles"
-        case .scratchpad: return "square.and.pencil"
-        case .settings: return "gearshape"
-        case .help: return "questionmark.circle"
-        }
-    }
-
-    static let mainItems: [Page] = [
-        .home, .insights, .dictionary, .training, .snippets, .myVoice, .style,
-        .transforms, .scratchpad,
-    ]
-    static let bottomItems: [Page] = [.settings, .help]
-}
-
 // MARK: - Root
 
 struct MainView: View {
@@ -225,8 +115,9 @@ struct RecordingPill: View {
             case .idle:
                 EmptyView()
             case .recording:
-                Label(app.isHandsFree ? "Recording — hands-free" : "Recording…",
-                      systemImage: "waveform")
+                Label(
+                    app.isPolishedRecording ? "Recording — Polished" : "Recording…",
+                    systemImage: app.isPolishedRecording ? "wand.and.stars" : "waveform")
                     .foregroundStyle(.red)
             case .processing:
                 Label("Transcribing…", systemImage: "hourglass")
@@ -468,8 +359,7 @@ struct HomePage: View {
                     .padding(.trailing, 40)
             }
             VStack(alignment: .leading, spacing: 10) {
-                (Text("Make Murmur sound like ")
-                    + Text("you").italic())
+                Text("Make Murmur sound like \(Text("you").italic())")
                     .font(.system(size: 32, design: .serif))
                     .foregroundStyle(.white)
                 Text("Teach it your names, jargon and spellings.")
@@ -1109,6 +999,7 @@ struct SettingsPage: View {
     @ObservedObject var app: AppDelegate
     @State private var supportedLocaleIDs: [String] = []
     @State private var whisperModelDownloaded = false
+    @State private var showPurgeConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1117,7 +1008,17 @@ struct SettingsPage: View {
                 .padding(.top, 24)
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Permissions").font(.headline)
+                HStack {
+                    Text("Permissions").font(.headline)
+                    Spacer()
+                    Label(
+                        app.micAuthorized && app.axTrusted ? "Ready" : "Needs access",
+                        systemImage: app.micAuthorized && app.axTrusted
+                            ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(
+                            app.micAuthorized && app.axTrusted ? .green : .orange)
+                }
                 permissionRow(
                     granted: app.micAuthorized,
                     title: "Microphone",
@@ -1197,7 +1098,9 @@ struct SettingsPage: View {
                         get: { app.engine },
                         set: { app.setEngine($0) })) {
                         Text("Apple — instant").tag("apple")
-                        Text("Whisper — precise").tag("whisper")
+                        if WhisperEngine.isAvailableInBuild {
+                            Text("Whisper — precise").tag("whisper")
+                        }
                     }
                     .labelsHidden()
                     .fixedSize()
@@ -1307,6 +1210,14 @@ struct SettingsPage: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Privacy").font(.headline)
                 toggleRow(
+                    title: "Incognito for this session",
+                    detail: "Dictation still works, but transcripts and usage " +
+                            "statistics are not saved. Resets when Murmur quits.",
+                    isOn: Binding(
+                        get: { app.incognitoMode },
+                        set: { app.setIncognitoMode($0) }))
+                Divider()
+                toggleRow(
                     title: "Pause history",
                     detail: "Transcripts are still inserted, just never written to disk.",
                     isOn: Binding(
@@ -1372,8 +1283,34 @@ struct SettingsPage: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Panic purge")
+                        Text("Deletes transcripts, statistics, learned corrections, " +
+                             "dictionary, snippets, presets, styles, and scratchpad.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Purge Personal Data…", role: .destructive) {
+                        showPurgeConfirm = true
+                    }
+                }
             }
             .card()
+            .confirmationDialog(
+                "Permanently purge all personal Murmur data?",
+                isPresented: $showPurgeConfirm
+            ) {
+                Button("Purge Personal Data", role: .destructive) {
+                    app.purgePersonalData()
+                }
+            } message: {
+                Text("Downloaded speech models, preferences, and macOS permission " +
+                     "grants are kept. Everything else listed here is deleted. " +
+                     "This cannot be undone.")
+            }
         }
         .onAppear {
             loadLocales()
@@ -1468,9 +1405,10 @@ struct HelpPage: View {
                     "Click into any text field, hold \(app.hotkey.displayName), speak, " +
                     "release. The cleaned-up text is pasted at your cursor.")
                 Divider()
-                helpRow("hands.and.sparkles", "Hands-free",
-                    "Double-tap \(app.hotkey.displayName) to keep recording without " +
-                    "holding. Tap once to stop.")
+                helpRow("wand.and.sparkles", "Polished dictation",
+                    "Double-tap \(app.hotkey.displayName) to arm it, then hold the " +
+                    "key normally for one model-cleaned dictation. The following " +
+                    "dictation automatically returns to Fast.")
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +

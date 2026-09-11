@@ -60,14 +60,9 @@ transcript:
 
 ## The default, and the trade behind it
 
-`Settings.cleanupLevel` defaults to **2 (Polished)**, which runs the model.
+`Settings.cleanupLevel` defaults to **1 (Cleaned)**, which is model-free.
 
-It defaulted to 1 (Cleaned, model-free) until the owner supplied the guide
-and asked for the rewrite explicitly. That is a deliberate trade. The model
-pass is the only way to compress a rambling dictation, and it is also the
-path that once turned a dictation mentioning "caveman mode" into caveman
-speech. The four defences above are what stand between those two facts.
-
-To take the model out of the path entirely:
-
-    defaults write local.murmur cleanupLevel -int 1
+Double-tapping the dictation key explicitly requests one Polished pass. This
+keeps ordinary hold-to-talk instant while preserving tuned cleanup for email
+and other writing where the extra second is worthwhile. The four defences
+above still guard every requested rewrite.

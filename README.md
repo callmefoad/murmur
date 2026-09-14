@@ -26,6 +26,10 @@ speech and language models, with an optional local Whisper engine.
   `defaults write local.murmur undoWindowSeconds -float 2`.
 - **Live caption HUD** — optional floating capsule near your cursor shows a
   waveform meter and live partial text while you speak.
+- **Live text preview** — interim speech can be written into the focused text
+  field as you speak; the final Fast or Polished result replaces it in place.
+  This is on by default for Apple streaming recognition and can be disabled in
+  Settings.
 - **Two recognition engines**, both offline:
   - **Apple** — instant, built into macOS (SpeechAnalyzer, macOS 26).
   - **Whisper** — optional precision engine via

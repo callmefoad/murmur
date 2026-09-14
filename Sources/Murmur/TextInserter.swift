@@ -60,6 +60,82 @@ enum TextInserter {
         var replacedText: String?
     }
 
+    /// A live draft anchored to the focused AX text element. Partial speech
+    /// is replaced inside this range as it arrives; the final cleaned text
+    /// swaps into the same range on release, so the field never accumulates
+    /// duplicate drafts. This path is intentionally AX-only — repeatedly
+    /// pasting through the clipboard would steal or corrupt the user's copy.
+    struct LiveDraft {
+        fileprivate let element: AXUIElement
+        fileprivate let baseLocation: Int
+        fileprivate let originalText: String?
+        fileprivate var currentLength: Int
+    }
+
+    /// Captures the current focused field and selection for live partial
+    /// insertion. Returns nil when Accessibility or a settable text range is
+    /// unavailable; the normal release-time insertion remains unchanged.
+    static func beginLiveDraft() -> LiveDraft? {
+        guard preferDirectInsertion, AXIsProcessTrusted(),
+              let element = focusedElement(), isLiveDraftCapable(element),
+              let range = selectedRange(of: element)
+        else { return nil }
+        let original = readFocusedSelection()
+        guard range.length == 0 || original != nil else { return nil }
+        return LiveDraft(
+            element: element, baseLocation: range.location,
+            originalText: range.length > 0 ? original : nil,
+            currentLength: range.length)
+    }
+
+    /// Replaces the visible draft while preserving the target field's caret.
+    /// Empty partials are ignored until a real transcript arrives.
+    @discardableResult
+    static func updateLiveDraft(_ draft: inout LiveDraft, text: String) -> Bool {
+        guard !text.isEmpty else { return true }
+        return replaceLiveDraftRange(&draft, with: text)
+    }
+
+    /// Replaces the current draft with the final cleaned text and returns the
+    /// same insertion metadata used by the undo path.
+    static func finishLiveDraft(
+        _ draft: inout LiveDraft, text: String
+    ) -> InsertionOutcome? {
+        guard !text.isEmpty, replaceLiveDraftRange(&draft, with: text)
+        else { return nil }
+        return InsertionOutcome(method: .ax, replacedText: draft.originalText)
+    }
+
+    /// Restores the pre-dictation selection when a recording is cancelled or
+    /// a target field stops accepting updates.
+    @discardableResult
+    static func abortLiveDraft(_ draft: inout LiveDraft) -> Bool {
+        replaceLiveDraftRange(&draft, with: draft.originalText ?? "")
+    }
+
+    private static func replaceLiveDraftRange(
+        _ draft: inout LiveDraft, with text: String
+    ) -> Bool {
+        guard let current = selectedRange(of: draft.element),
+              current.length == 0,
+              current.location == draft.baseLocation + draft.currentLength
+        else { return false }
+        var span = CFRange(location: draft.baseLocation, length: draft.currentLength)
+        guard let axSpan = AXValueCreate(.cfRange, &span),
+              AXUIElementSetAttributeValue(
+                  draft.element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success,
+              AXUIElementSetAttributeValue(
+                  draft.element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+        else { return false }
+        let newLength = (text as NSString).length
+        draft.currentLength = newLength
+        if let updated = selectedRange(of: draft.element) {
+            return updated.length == 0
+                && updated.location == draft.baseLocation + newLength
+        }
+        return true
+    }
+
     /// Returns what happened (mechanism + replaced selection, if any) so
     /// the caller can record it for a later matching undo.
     @discardableResult
@@ -167,6 +243,21 @@ enum TextInserter {
     private static let axInsertableRoles: Set<String> = [
         "AXTextField", "AXTextArea", "AXComboBox", "AXWebArea",
     ]
+
+    private static func isLiveDraftCapable(_ element: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextAttribute as CFString, &settable) == .success,
+              settable.boolValue
+        else { return false }
+        var roleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &roleRef) == .success,
+              let role = roleRef as? String,
+              axInsertableRoles.contains(role)
+        else { return false }
+        return true
+    }
 
     /// Attempts to insert `text` at the caret of the focused element via
     /// the Accessibility API, replacing only the current selection (which

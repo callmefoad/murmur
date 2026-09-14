@@ -309,7 +309,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         } else {
             trusted = AXIsProcessTrusted()
         }
-        if axTrusted != trusted { axTrusted = trusted }
+        if axTrusted != trusted {
+            axTrusted = trusted
+            // A grant can arrive while the dashboard is open. The monitors
+            // started before that grant were passive; restart them now so fn
+            // is actually swallowed and the native macOS Dictation shortcut
+            // cannot compete with Murmur without requiring a relaunch.
+            if hotkeyMonitor.mode != .off {
+                hotkeyMonitor.startMonitoring()
+            }
+            if transformManager.mode != .off {
+                transformManager.startMonitoring()
+            }
+        }
 
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if micAuthorized != mic { micAuthorized = mic }

@@ -876,7 +876,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         if TextInserter.updateLiveDraft(&draft, text: text) {
             liveDraft = draft
         } else {
-            liveDraft = nil
+            // Restore the original selection when possible. If the target
+            // moved focus and restoration fails, retain the draft handle so
+            // the release path can refuse a duplicate insertion safely.
+            let restored = TextInserter.abortLiveDraft(&draft)
+            liveDraft = restored ? nil : draft
             lastError = "Live text paused — the focused field stopped accepting updates."
         }
     }

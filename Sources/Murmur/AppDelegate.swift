@@ -41,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// Opt-in: whether spoken symbol tokens ("comma", "star") convert.
     @Published var spokenSymbols: Bool = Settings.spokenSymbols
     @Published var liveCaptions: Bool = Settings.liveCaptions
-    @Published var liveTextInField: Bool = Settings.liveTextInField
     @Published var consumeHotkey: Bool = Settings.consumeHotkey
     @Published var historyPaused: Bool = Settings.historyPaused
     /// Session-only privacy mode. It intentionally resets to off on launch.
@@ -396,12 +395,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Settings.liveCaptions = on
         liveCaptions = on
         if !on { hud.hide() }
-    }
-
-    func setLiveTextInField(_ on: Bool) {
-        Settings.liveTextInField = on
-        liveTextInField = on
-        if !on { abortLiveDraft() }
     }
 
     func setConsumeHotkey(_ on: Bool) {
@@ -766,7 +759,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 self.recorder.cancel()
                  self.streamingTask?.cancel()
                  self.streamingTask = nil
-                 self.abortLiveDraft()
                  self.hud.hide()
                  self.uiState = .idle
             }
@@ -787,7 +779,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// Live transcription in flight, when `Settings.streamingTranscription`
     /// is on. Nil for the default file-based path.
     private var streamingTask: Task<String, Error>?
-    private var liveDraft: TextInserter.LiveDraft?
     private var forcePolishedForCurrentDictation = false
     private var polishNextDictation = false
 
@@ -857,10 +848,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 let started = try recorder.startStreaming()
                 let transcriber = self.transcriber
                 transcriber.onPartialTranscript = { [weak self] text in
-                    DispatchQueue.main.async {
-                        self?.hud.update(caption: text)
-                        self?.updateLiveDraft(text)
-                    }
+                    DispatchQueue.main.async { self?.hud.update(caption: text) }
                 }
                 streamingTask = Task {
                     // The vocabulary read touches several JSON files; fetch
@@ -881,32 +869,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             lastError = nil
             NSSound(named: "Pop")?.play()
             if Settings.liveCaptions { hud.show() }
-            liveDraft = liveTextInField ? TextInserter.beginLiveDraft() : nil
         } catch {
             hud.hide()
             lastError = "Could not start recording: \(error.localizedDescription)"
             NSSound(named: "Basso")?.play()
         }
-    }
-
-    private func updateLiveDraft(_ text: String) {
-        guard liveTextInField, var draft = liveDraft else { return }
-        if TextInserter.updateLiveDraft(&draft, text: text) {
-            liveDraft = draft
-        } else {
-            // Restore the original selection when possible. If the target
-            // moved focus and restoration fails, retain the draft handle so
-            // the release path can refuse a duplicate insertion safely.
-            let restored = TextInserter.abortLiveDraft(&draft)
-            liveDraft = restored ? nil : draft
-            lastError = "Live text paused — the focused field stopped accepting updates."
-        }
-    }
-
-    private func abortLiveDraft() {
-        guard var draft = liveDraft else { return }
-        liveDraft = nil
-        _ = TextInserter.abortLiveDraft(&draft)
     }
 
     /// Awaits the live transcript, falling back to the file that was recorded
@@ -934,7 +901,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         streamingTask = nil
         guard let url = recorder.stop() else {
             streaming?.cancel()
-            abortLiveDraft()
             uiState = .idle
             return
         }
@@ -946,8 +912,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         recordingTargetBundleID = nil
         let forcePolished = forcePolishedForCurrentDictation
         forcePolishedForCurrentDictation = false
-        let draft = liveDraft
-        liveDraft = nil
 
         Task { [history] in
             var telemetry = PipelineTelemetry()
@@ -1052,31 +1016,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                         refreshVoiceProfileIfDue()
                     }
                     if AXIsProcessTrusted() {
-                        var outcome: TextInserter.InsertionOutcome?
-                        if var draft {
-                            outcome = TextInserter.finishLiveDraft(&draft, text: formatted)
-                            if outcome == nil {
-                                // If the field changed mid-dictation, first
-                                // remove the visible draft when possible so
-                                // the final insertion cannot duplicate it.
-                                if TextInserter.abortLiveDraft(&draft) {
-                                    outcome = TextInserter.insert(formatted)
-                                } else {
-                                    lastError = "Live text could not be finalized safely; " +
-                                        "the cleaned text was copied to your clipboard."
-                                    TextInserter.place(formatted)
-                                }
-                            }
-                        } else {
-                            outcome = TextInserter.insert(formatted)
-                        }
-                        if let outcome {
-                            lastInsertion = LastInsertion(
-                                text: formatted, method: outcome.method, date: Date(),
-                                bundleID: NSWorkspace.shared.frontmostApplication?
-                                    .bundleIdentifier ?? targetBundleID,
-                                replacedText: outcome.replacedText)
-                        }
+                        let outcome = TextInserter.insert(formatted)
+                        lastInsertion = LastInsertion(
+                            text: formatted, method: outcome.method, date: Date(),
+                            bundleID: NSWorkspace.shared.frontmostApplication?
+                                .bundleIdentifier ?? targetBundleID,
+                            replacedText: outcome.replacedText)
                     } else {
                         // Can't synthesize ⌘V without Accessibility — never
                         // fail silently: leave the transcript on the clipboard.
@@ -1094,15 +1039,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                         usedModel: usedModel, inserted: AXIsProcessTrusted())
                     rebuildMenu()
                 } else {
-                    if var draft {
-                        _ = TextInserter.abortLiveDraft(&draft)
-                    }
                     telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 }
             } catch {
-                if var draft {
-                    _ = TextInserter.abortLiveDraft(&draft)
-                }
                 telemetry.finish("failed")
                 telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 lastError = "Transcription failed: \(error.localizedDescription)"
@@ -1314,14 +1253,6 @@ enum Settings {
     static var streamingTranscription: Bool {
         get { defaults.object(forKey: "streamingTranscription") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "streamingTranscription") }
-    }
-
-    /// Whether interim SpeechAnalyzer text is written into the focused AX
-    /// field while the user speaks. The final Fast/Polished result replaces
-    /// this draft in place. Clipboard-only targets fall back to the HUD.
-    static var liveTextInField: Bool {
-        get { defaults.object(forKey: "liveTextInField") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "liveTextInField") }
     }
 
     /// Whether recognized text gets a trailing period auto-appended.

@@ -1150,15 +1150,6 @@ struct SettingsPage: View {
                         get: { app.liveCaptions },
                         set: { app.setLiveCaptions($0) }))
                 Divider()
-                toggleRow(
-                    title: "Write live text in the focused field",
-                    detail: "Shows the interim transcript where your cursor is. " +
-                            "The final Fast or Polished result replaces it in place. " +
-                            "Requires Accessibility and Apple streaming recognition.",
-                    isOn: Binding(
-                        get: { app.liveTextInField },
-                        set: { app.setLiveTextInField($0) }))
-                Divider()
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {

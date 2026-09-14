@@ -103,7 +103,7 @@ final class DictationHUD {
     private func makePanelIfNeeded() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 64),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 64),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.isOpaque = false
@@ -244,14 +244,15 @@ private struct DictationHUDContent: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         } else {
-            // Head-truncated so the newest words stay visible as the
-            // partial transcript grows past the strip's width.
+            // Keep two lines so the live draft is useful while it grows;
+            // head-truncate only after both lines are full so the newest
+            // words remain visible without a tiny one-line sliver.
             Text(model.caption)
                 .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(0.92))
-                .lineLimit(1)
+                .lineLimit(2)
                 .truncationMode(.head)
-                .frame(maxWidth: model.notchMode ? 270 : 240, alignment: .leading)
+                .frame(maxWidth: model.notchMode ? 350 : 320, alignment: .leading)
         }
     }
 }

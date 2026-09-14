@@ -66,9 +66,13 @@ enum TextInserter {
     /// duplicate drafts. This path is intentionally AX-only — repeatedly
     /// pasting through the clipboard would steal or corrupt the user's copy.
     struct LiveDraft {
+        fileprivate enum Mode: Equatable { case selectedText, value }
         fileprivate let element: AXUIElement
         fileprivate let baseLocation: Int
         fileprivate let originalText: String?
+        fileprivate let originalValue: String
+        fileprivate let mode: Mode
+        fileprivate var currentValue: String
         fileprivate var currentLength: Int
     }
 
@@ -77,14 +81,40 @@ enum TextInserter {
     /// unavailable; the normal release-time insertion remains unchanged.
     static func beginLiveDraft() -> LiveDraft? {
         guard preferDirectInsertion, AXIsProcessTrusted(),
-              let element = focusedElement(), isLiveDraftCapable(element),
-              let range = selectedRange(of: element)
+              let element = focusedElement(),
+              let range = selectedRange(of: element),
+              let value = stringAttribute(element, kAXValueAttribute as String)
         else { return nil }
-        let original = readFocusedSelection()
+        var roleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &roleRef) == .success,
+              let role = roleRef as? String,
+              axInsertableRoles.contains(role)
+        else { return nil }
+        var selectedSettable: DarwinBoolean = false
+        let canSetSelection = AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextAttribute as CFString, &selectedSettable) == .success
+            && selectedSettable.boolValue
+        var valueSettable: DarwinBoolean = false
+        let canSetValue = AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &valueSettable) == .success
+            && valueSettable.boolValue
+        guard canSetSelection || canSetValue else { return nil }
+        let original = readFocusedSelection() ?? {
+            guard range.length > 0,
+                  range.location >= 0,
+                  range.location + range.length <= (value as NSString).length
+            else { return nil }
+            return (value as NSString).substring(
+                with: NSRange(location: range.location, length: range.length))
+        }()
         guard range.length == 0 || original != nil else { return nil }
         return LiveDraft(
             element: element, baseLocation: range.location,
             originalText: range.length > 0 ? original : nil,
+            originalValue: value,
+            mode: canSetSelection ? .selectedText : .value,
+            currentValue: value,
             currentLength: range.length)
     }
 
@@ -116,18 +146,53 @@ enum TextInserter {
     private static func replaceLiveDraftRange(
         _ draft: inout LiveDraft, with text: String
     ) -> Bool {
-        guard let current = selectedRange(of: draft.element),
-              current.length == 0,
-              current.location == draft.baseLocation + draft.currentLength
-        else { return false }
-        var span = CFRange(location: draft.baseLocation, length: draft.currentLength)
-        guard let axSpan = AXValueCreate(.cfRange, &span),
-              AXUIElementSetAttributeValue(
-                  draft.element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success,
-              AXUIElementSetAttributeValue(
-                  draft.element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
-        else { return false }
         let newLength = (text as NSString).length
+        switch draft.mode {
+        case .selectedText:
+            guard let current = selectedRange(of: draft.element),
+                  current.length == 0,
+                  current.location == draft.baseLocation + draft.currentLength
+            else { return false }
+            var span = CFRange(location: draft.baseLocation, length: draft.currentLength)
+            guard let axSpan = AXValueCreate(.cfRange, &span),
+                  AXUIElementSetAttributeValue(
+                      draft.element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success,
+                  AXUIElementSetAttributeValue(
+                      draft.element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+            else { return false }
+        case .value:
+            guard let current = stringAttribute(
+                draft.element, kAXValueAttribute as String),
+                  current == draft.currentValue,
+                  draft.baseLocation >= 0,
+                  draft.baseLocation + draft.currentLength <= (current as NSString).length
+            else { return false }
+            let updated = NSMutableString(string: current)
+            updated.replaceCharacters(
+                in: NSRange(location: draft.baseLocation, length: draft.currentLength),
+                with: text)
+            guard AXUIElementSetAttributeValue(
+                draft.element, kAXValueAttribute as CFString, updated as CFString) == .success
+            else { return false }
+            // Setting AXValue can reset the caret in some AppKit fields. Put
+            // it back after the value write when the range is settable.
+            var caret = CFRange(location: draft.baseLocation + newLength, length: 0)
+            if let axCaret = AXValueCreate(.cfRange, &caret) {
+                _ = AXUIElementSetAttributeValue(
+                    draft.element, kAXSelectedTextRangeAttribute as CFString, axCaret)
+            }
+            guard stringAttribute(draft.element, kAXValueAttribute as String)
+                    == updated as String
+            else { return false }
+            draft.currentValue = updated as String
+        }
+        if draft.mode == .selectedText {
+            let updated = NSMutableString(string: draft.currentValue)
+            updated.replaceCharacters(
+                in: NSRange(location: draft.baseLocation, length: draft.currentLength),
+                with: text)
+            draft.currentValue = updated as String
+        }
         draft.currentLength = newLength
         if let updated = selectedRange(of: draft.element) {
             return updated.length == 0
@@ -243,21 +308,6 @@ enum TextInserter {
     private static let axInsertableRoles: Set<String> = [
         "AXTextField", "AXTextArea", "AXComboBox", "AXWebArea",
     ]
-
-    private static func isLiveDraftCapable(_ element: AXUIElement) -> Bool {
-        var settable: DarwinBoolean = false
-        guard AXUIElementIsAttributeSettable(
-            element, kAXSelectedTextAttribute as CFString, &settable) == .success,
-              settable.boolValue
-        else { return false }
-        var roleRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element, kAXRoleAttribute as CFString, &roleRef) == .success,
-              let role = roleRef as? String,
-              axInsertableRoles.contains(role)
-        else { return false }
-        return true
-    }
 
     /// Attempts to insert `text` at the caret of the focused element via
     /// the Accessibility API, replacing only the current selection (which

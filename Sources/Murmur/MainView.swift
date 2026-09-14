@@ -1067,6 +1067,15 @@ struct SettingsPage: View {
                     .fixedSize()
                 }
                 Divider()
+                toggleRow(
+                    title: "Block macOS Dictation for fn",
+                    detail: "Prevents the blue macOS microphone HUD from " +
+                            "also seeing Murmur's fn gesture. Turn off only " +
+                            "if you need fn+arrow, fn+Delete, or fn+F-key shortcuts.",
+                    isOn: Binding(
+                        get: { app.consumeHotkey },
+                        set: { app.setConsumeHotkey($0) }))
+                Divider()
                 HStack {
                     Text("Language")
                     Spacer()

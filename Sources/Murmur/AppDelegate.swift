@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @Published var spokenSymbols: Bool = Settings.spokenSymbols
     @Published var liveCaptions: Bool = Settings.liveCaptions
     @Published var liveTextInField: Bool = Settings.liveTextInField
+    @Published var consumeHotkey: Bool = Settings.consumeHotkey
     @Published var historyPaused: Bool = Settings.historyPaused
     /// Session-only privacy mode. It intentionally resets to off on launch.
     @Published var incognitoMode = false { didSet { updateIcon(); rebuildMenu() } }
@@ -389,6 +390,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Settings.liveTextInField = on
         liveTextInField = on
         if !on { abortLiveDraft() }
+    }
+
+    func setConsumeHotkey(_ on: Bool) {
+        Settings.consumeHotkey = on
+        consumeHotkey = on
     }
 
     func setHistoryPaused(_ on: Bool) {
@@ -1392,11 +1398,12 @@ enum Settings {
     }
 
     /// When true, the dictation hotkey is swallowed via a session event tap
-    /// so the frontmost app never sees it. Off by default: fn is also a live
-    /// modifier (fn+arrows for Home/End, fn+Delete, fn+F-keys), and swallowing
-    /// its flagsChanged can break those combos system-wide.
+    /// so the frontmost app never sees it. On by default for fn: otherwise
+    /// macOS may interpret a double-press as its own Dictation shortcut and
+    /// show a competing microphone HUD. Turn it off if you rely on fn+arrows,
+    /// fn+Delete, or fn+F-keys in other apps.
     static var consumeHotkey: Bool {
-        get { defaults.bool(forKey: "consumeHotkey") }
+        get { defaults.object(forKey: "consumeHotkey") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "consumeHotkey") }
     }
 

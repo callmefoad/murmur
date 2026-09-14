@@ -11,6 +11,7 @@ enum TextInserter {
     /// Escape hatch: flip to `false` in one place if AX insertion misbehaves
     /// in the field. No UserDefaults key or UI — this is a code-level knob.
     /// Whether to try the accessibility path before the clipboard round-trip.
+    /// Live drafts still use the clipboard fallback when this is false.
     /// Defaults to true. Reads UserDefaults each time so it can be turned off
     /// on a running install without a rebuild:
     ///     defaults write local.murmur directInsertion -bool false
@@ -63,11 +64,11 @@ enum TextInserter {
     /// A live draft anchored to the focused AX text element. Partial speech
     /// is replaced inside this range as it arrives; the final cleaned text
     /// swaps into the same range on release, so the field never accumulates
-    /// duplicate drafts. This path is intentionally AX-only — repeatedly
-    /// pasting through the clipboard would steal or corrupt the user's copy.
+    /// duplicate drafts. AX is preferred; a guarded paste-and-undo fallback
+    /// covers apps that expose no writable AX text value.
     struct LiveDraft {
-        fileprivate enum Mode: Equatable { case selectedText, value }
-        fileprivate let element: AXUIElement
+        fileprivate enum Mode: Equatable { case selectedText, value, paste }
+        fileprivate let element: AXUIElement?
         fileprivate let baseLocation: Int
         fileprivate let originalText: String?
         fileprivate let originalValue: String
@@ -77,20 +78,25 @@ enum TextInserter {
     }
 
     /// Captures the current focused field and selection for live partial
-    /// insertion. Returns nil when Accessibility or a settable text range is
-    /// unavailable; the normal release-time insertion remains unchanged.
+    /// insertion. Apps with incomplete AX APIs use a guarded paste fallback.
     static func beginLiveDraft() -> LiveDraft? {
+        // The live-field setting is an explicit opt-in to writing into the
+        // current target. If AX is unavailable, keep that behaviour useful by
+        // using the same concealed clipboard path as final insertion.
         guard preferDirectInsertion, AXIsProcessTrusted(),
-              let element = focusedElement(),
-              let range = selectedRange(of: element),
-              let value = stringAttribute(element, kAXValueAttribute as String)
-        else { return nil }
+              let element = focusedElement()
+        else { return makePasteDraft() }
         var roleRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRef) == .success,
               let role = roleRef as? String,
               axInsertableRoles.contains(role)
-        else { return nil }
+        else { return makePasteDraft() }
+        guard let range = selectedRange(of: element),
+              let value = stringAttribute(element, kAXValueAttribute as String)
+        else {
+            return makePasteDraft()
+        }
         var selectedSettable: DarwinBoolean = false
         let canSetSelection = AXUIElementIsAttributeSettable(
             element, kAXSelectedTextAttribute as CFString, &selectedSettable) == .success
@@ -99,7 +105,9 @@ enum TextInserter {
         let canSetValue = AXUIElementIsAttributeSettable(
             element, kAXValueAttribute as CFString, &valueSettable) == .success
             && valueSettable.boolValue
-        guard canSetSelection || canSetValue else { return nil }
+        guard canSetSelection || canSetValue else {
+            return makePasteDraft()
+        }
         let original = readFocusedSelection() ?? {
             guard range.length > 0,
                   range.location >= 0,
@@ -108,7 +116,7 @@ enum TextInserter {
             return (value as NSString).substring(
                 with: NSRange(location: range.location, length: range.length))
         }()
-        guard range.length == 0 || original != nil else { return nil }
+        guard range.length == 0 || original != nil else { return makePasteDraft() }
         return LiveDraft(
             element: element, baseLocation: range.location,
             originalText: range.length > 0 ? original : nil,
@@ -116,6 +124,18 @@ enum TextInserter {
             mode: canSetSelection ? .selectedText : .value,
             currentValue: value,
             currentLength: range.length)
+    }
+
+    /// Creates the clipboard-backed live draft used when a target app does
+    /// not expose enough AX metadata for direct range updates. The caller has
+    /// already opted into live text, so this is the safest useful fallback:
+    /// Murmur owns only its concealed draft and restores the user's clipboard
+    /// after the last paste (or immediately on cancel).
+    private static func makePasteDraft() -> LiveDraft {
+        beginClipboardHold()
+        return LiveDraft(
+            element: nil, baseLocation: 0, originalText: nil,
+            originalValue: "", mode: .paste, currentValue: "", currentLength: 0)
     }
 
     /// Replaces the visible draft while preserving the target field's caret.
@@ -133,14 +153,24 @@ enum TextInserter {
     ) -> InsertionOutcome? {
         guard !text.isEmpty, replaceLiveDraftRange(&draft, with: text)
         else { return nil }
-        return InsertionOutcome(method: .ax, replacedText: draft.originalText)
+        return InsertionOutcome(
+            method: draft.mode == .paste ? .paste : .ax,
+            replacedText: draft.originalText)
     }
 
     /// Restores the pre-dictation selection when a recording is cancelled or
     /// a target field stops accepting updates.
     @discardableResult
     static func abortLiveDraft(_ draft: inout LiveDraft) -> Bool {
-        replaceLiveDraftRange(&draft, with: draft.originalText ?? "")
+        if draft.mode == .paste {
+            if draft.currentLength > 0 {
+                sendKeystroke(kVK_ANSI_Z, flags: .maskCommand)
+            }
+            restoreHeldClipboard()
+            draft.currentLength = 0
+            return true
+        }
+        return replaceLiveDraftRange(&draft, with: draft.originalText ?? "")
     }
 
     private static func replaceLiveDraftRange(
@@ -148,21 +178,35 @@ enum TextInserter {
     ) -> Bool {
         let newLength = (text as NSString).length
         switch draft.mode {
+        case .paste:
+            if draft.currentLength > 0 {
+                sendKeystroke(kVK_ANSI_Z, flags: .maskCommand)
+            }
+            let stamp = writeConcealed(text)
+            sendKeystroke(kVK_ANSI_V, flags: .maskCommand)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                attemptRestore(expectedStamp: stamp)
+            }
+            draft.currentValue = text
+            draft.currentLength = newLength
+            return true
         case .selectedText:
-            guard let current = selectedRange(of: draft.element),
+            guard let element = draft.element,
+                  let current = selectedRange(of: element),
                   current.length == 0,
                   current.location == draft.baseLocation + draft.currentLength
             else { return false }
             var span = CFRange(location: draft.baseLocation, length: draft.currentLength)
             guard let axSpan = AXValueCreate(.cfRange, &span),
                   AXUIElementSetAttributeValue(
-                      draft.element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success,
+                      element, kAXSelectedTextRangeAttribute as CFString, axSpan) == .success,
                   AXUIElementSetAttributeValue(
-                      draft.element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+                      element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
             else { return false }
         case .value:
-            guard let current = stringAttribute(
-                draft.element, kAXValueAttribute as String),
+            guard let element = draft.element,
+                  let current = stringAttribute(
+                element, kAXValueAttribute as String),
                   current == draft.currentValue,
                   draft.baseLocation >= 0,
                   draft.baseLocation + draft.currentLength <= (current as NSString).length
@@ -172,16 +216,16 @@ enum TextInserter {
                 in: NSRange(location: draft.baseLocation, length: draft.currentLength),
                 with: text)
             guard AXUIElementSetAttributeValue(
-                draft.element, kAXValueAttribute as CFString, updated as CFString) == .success
+                element, kAXValueAttribute as CFString, updated as CFString) == .success
             else { return false }
             // Setting AXValue can reset the caret in some AppKit fields. Put
             // it back after the value write when the range is settable.
             var caret = CFRange(location: draft.baseLocation + newLength, length: 0)
             if let axCaret = AXValueCreate(.cfRange, &caret) {
                 _ = AXUIElementSetAttributeValue(
-                    draft.element, kAXSelectedTextRangeAttribute as CFString, axCaret)
+                    element, kAXSelectedTextRangeAttribute as CFString, axCaret)
             }
-            guard stringAttribute(draft.element, kAXValueAttribute as String)
+            guard stringAttribute(element, kAXValueAttribute as String)
                     == updated as String
             else { return false }
             draft.currentValue = updated as String
@@ -194,7 +238,8 @@ enum TextInserter {
             draft.currentValue = updated as String
         }
         draft.currentLength = newLength
-        if let updated = selectedRange(of: draft.element) {
+        if let element = draft.element,
+           let updated = selectedRange(of: element) {
             return updated.length == 0
                 && updated.location == draft.baseLocation + newLength
         }

@@ -10,6 +10,11 @@ import Foundation
 /// - A warm always-on engine with a pre-roll ring buffer: wedged the engine
 ///   so recording never started.
 final class AudioRecorder {
+    struct StreamingStart {
+        let stream: AsyncStream<AVAudioPCMBuffer>
+        let format: AVAudioFormat
+    }
+
     /// Rebuilt for every recording. On macOS an `AVAudioEngine`'s input node
     /// binds to whatever audio device was default when the node was first
     /// instantiated, and it does not follow later changes — so a long-lived
@@ -31,10 +36,24 @@ final class AudioRecorder {
     /// already performs file I/O and allocation on that thread, so an uncontended
     /// lock introduces no new class of problem.
     private let fileLock = NSLock()
+    /// CoreAudio can block while an input device is being enumerated. Keep
+    /// that work off the main actor so a missing or wedged device cannot make
+    /// the dashboard appear frozen.
+    private let startQueue = DispatchQueue(
+        label: "local.murmur.audio-start", qos: .userInitiated)
+    private let startStateLock = NSLock()
+    private var startInFlight = false
+    private var cancelStartRequested = false
     /// Live buffer sink, non-nil only while a streaming recording is in flight.
     private var streamContinuation: AsyncStream<AVAudioPCMBuffer>.Continuation?
     private(set) var currentFileURL: URL?
     private(set) var isRecording = false
+
+    var isStarting: Bool {
+        startStateLock.lock()
+        defer { startStateLock.unlock() }
+        return startInFlight
+    }
 
     /// Called with each tap buffer's RMS level (~every 85 ms at the standard
     /// 4096-frame/48 kHz tap), hopped to the main queue. Set once at launch,
@@ -61,6 +80,32 @@ final class AudioRecorder {
 
     func start() throws {
         try start(publishingBuffers: false)
+    }
+
+    /// Starts file recording away from the main actor. The synchronous
+    /// `start()` remains for the voice-training page, while push-to-talk uses
+    /// this wrapper because AVAudioEngine format discovery can block.
+    @discardableResult
+    func startAsync(completion: @escaping (Result<Void, Error>) -> Void) -> Bool {
+        guard beginAsyncStart() else { return false }
+        startQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.start(publishingBuffers: false)
+                if self.finishAsyncStart() {
+                    self.cancel()
+                    DispatchQueue.main.async {
+                        completion(.failure(CancellationError()))
+                    }
+                } else {
+                    DispatchQueue.main.async { completion(.success(())) }
+                }
+            } catch {
+                _ = self.finishAsyncStart()
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+        return true
     }
 
     /// Starts recording exactly as `start()` does — the temp `.caf` is still
@@ -95,6 +140,61 @@ final class AudioRecorder {
             throw error
         }
         return (stream, format)
+    }
+
+    /// Streaming counterpart to `startAsync(completion:)`.
+    @discardableResult
+    func startStreamingAsync(
+        completion: @escaping (Result<StreamingStart, Error>) -> Void
+    ) -> Bool {
+        guard beginAsyncStart() else { return false }
+        startQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let started = try self.startStreaming()
+                let result = StreamingStart(stream: started.stream, format: started.format)
+                if self.finishAsyncStart() {
+                    self.cancel()
+                    DispatchQueue.main.async {
+                        completion(.failure(CancellationError()))
+                    }
+                } else {
+                    DispatchQueue.main.async { completion(.success(result)) }
+                }
+            } catch {
+                _ = self.finishAsyncStart()
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+        return true
+    }
+
+    /// Requests cancellation of a startup currently blocked in CoreAudio.
+    /// The control queue finishes cleanup when the system call returns.
+    func cancelPendingStart() {
+        startStateLock.lock()
+        if startInFlight { cancelStartRequested = true }
+        startStateLock.unlock()
+    }
+
+    private func beginAsyncStart() -> Bool {
+        startStateLock.lock()
+        defer { startStateLock.unlock() }
+        guard !startInFlight else { return false }
+        startInFlight = true
+        cancelStartRequested = false
+        return true
+    }
+
+    /// Returns whether the caller requested cancellation, and clears the
+    /// in-flight marker before the completion is delivered on the main queue.
+    private func finishAsyncStart() -> Bool {
+        startStateLock.lock()
+        let cancelled = cancelStartRequested
+        startInFlight = false
+        cancelStartRequested = false
+        startStateLock.unlock()
+        return cancelled
     }
 
     private func start(publishingBuffers: Bool) throws {

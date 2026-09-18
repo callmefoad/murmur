@@ -756,11 +756,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 guard let self else { return }
                 // `cancel()` finishes the buffer stream, so the streaming task
                 // returns on its own; cancelling it just drops the result.
-                self.recorder.cancel()
-                 self.streamingTask?.cancel()
-                 self.streamingTask = nil
-                 self.hud.hide()
-                 self.uiState = .idle
+                if self.recorder.isStarting {
+                    self.recorder.cancelPendingStart()
+                } else {
+                    self.recorder.cancel()
+                }
+                self.streamingTask?.cancel()
+                self.streamingTask = nil
+                self.recordingStartedAt = nil
+                self.recordingTargetBundleID = nil
+                self.hud.hide()
+                self.uiState = .idle
             }
         }
         hotkeyMonitor.onPolishedRequested = { [weak self] in
@@ -843,37 +849,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         forcePolishedForCurrentDictation = polishNextDictation
         isPolishedRecording = polishNextDictation
         polishNextDictation = false
-        do {
-            if streamingEnabled {
-                let started = try recorder.startStreaming()
-                let transcriber = self.transcriber
-                transcriber.onPartialTranscript = { [weak self] text in
-                    DispatchQueue.main.async { self?.hud.update(caption: text) }
-                }
-                streamingTask = Task {
-                    // The vocabulary read touches several JSON files; fetch
-                    // it inside the task (off main via the nonisolated async
-                    // call) so key-down handling never waits on disk.
-                    let biasTerms = await LearnedStore.biasTerms()
-                    return try await transcriber.transcribe(
-                        buffers: started.stream, inputFormat: started.format,
-                        biasTerms: biasTerms)
-                }
-            } else {
-                try recorder.start()
+        recordingTargetBundleID =
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        uiState = .recording
+        lastError = nil
+        NSSound(named: "Pop")?.play()
+        if Settings.liveCaptions { hud.show() }
+
+        if streamingEnabled {
+            let started = recorder.startStreamingAsync { [weak self] result in
+                self?.finishStreamingStart(result)
             }
-            recordingStartedAt = Date()
-            recordingTargetBundleID =
-                NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            uiState = .recording
-            lastError = nil
-            NSSound(named: "Pop")?.play()
-            if Settings.liveCaptions { hud.show() }
-        } catch {
-            hud.hide()
-            lastError = "Could not start recording: \(error.localizedDescription)"
-            NSSound(named: "Basso")?.play()
+            if !started {
+                failRecordingStart("Microphone startup is already in progress.")
+                return
+            }
+        } else {
+            let started = recorder.startAsync { [weak self] result in
+                self?.finishFileStart(result)
+            }
+            if !started {
+                failRecordingStart("Microphone startup is already in progress.")
+                return
+            }
         }
+    }
+
+    private func finishFileStart(_ result: Result<Void, Error>) {
+        guard uiState == .recording else {
+            if case .success = result { recorder.cancel() }
+            return
+        }
+        switch result {
+        case .success:
+            recordingStartedAt = Date()
+        case .failure(let error):
+            failRecordingStart("Could not start recording: \(error.localizedDescription)")
+        }
+    }
+
+    private func finishStreamingStart(
+        _ result: Result<AudioRecorder.StreamingStart, Error>
+    ) {
+        guard uiState == .recording else {
+            if case .success = result { recorder.cancel() }
+            return
+        }
+        switch result {
+        case .failure(let error):
+            failRecordingStart("Could not start recording: \(error.localizedDescription)")
+        case .success(let started):
+            recordingStartedAt = Date()
+            let transcriber = self.transcriber
+            transcriber.onPartialTranscript = { [weak self] text in
+                DispatchQueue.main.async { self?.hud.update(caption: text) }
+            }
+            streamingTask = Task {
+                // The vocabulary read touches several JSON files; fetch
+                // it inside the task (off main via the nonisolated async
+                // call) so key-down handling never waits on disk.
+                let biasTerms = await LearnedStore.biasTerms()
+                return try await transcriber.transcribe(
+                    buffers: started.stream, inputFormat: started.format,
+                    biasTerms: biasTerms)
+            }
+        }
+    }
+
+    private func failRecordingStart(_ message: String) {
+        hud.hide()
+        recordingStartedAt = nil
+        recordingTargetBundleID = nil
+        uiState = .idle
+        lastError = message
+        NSSound(named: "Basso")?.play()
     }
 
     /// Awaits the live transcript, falling back to the file that was recorded
@@ -897,10 +946,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private func stopAndTranscribe() {
         isPolishedRecording = false
         hud.hide()
+        if recorder.isStarting {
+            recorder.cancelPendingStart()
+            streamingTask?.cancel()
+            streamingTask = nil
+            recordingStartedAt = nil
+            recordingTargetBundleID = nil
+            uiState = .idle
+            return
+        }
         let streaming = streamingTask
         streamingTask = nil
         guard let url = recorder.stop() else {
             streaming?.cancel()
+            recordingStartedAt = nil
+            recordingTargetBundleID = nil
             uiState = .idle
             return
         }

@@ -545,9 +545,15 @@ struct TextFormatter {
         // No space after opening brackets/quotes/underscore.
         result = result.replacingOccurrences(
             of: "([(\\[{“‘_]) +", with: "$1", options: .regularExpression)
-        // Collapse duplicate punctuation like ",." or ".." left by edits.
+        // Speech recognition sometimes emits an ellipsis or repeats a
+        // spoken period that it already inserted. Murmur uses explicit
+        // sentence punctuation instead of dot runs, so keep one period.
         result = result.replacingOccurrences(
-            of: "([,.;:!?])[,.]", with: "$1", options: .regularExpression)
+            of: "\\.{2,}", with: ".", options: .regularExpression)
+        // Collapse duplicate punctuation like ",," or "??" left by the
+        // recognizer when a spoken token lands beside its own punctuation.
+        result = result.replacingOccurrences(
+            of: "([,;:!?])\\1+", with: "$1", options: .regularExpression)
         // Trim each line — spaces only, so a leading tab keeps its indent.
         result = result
             .components(separatedBy: "\n")

@@ -1376,15 +1376,13 @@ enum Settings {
         set { defaults.set(newValue, forKey: "spokenLayout") }
     }
 
-    /// Spoken symbol tokens ("comma" -> ",", "star" -> "*", "dash" -> "-")
-    /// converting into glyphs. OFF by default: both recognition engines
-    /// already insert punctuation on their own, so the tokens are largely
-    /// redundant, while the false-positive rate on ordinary words like
-    /// "period", "star", "dash" and "colon" is high ("add a star there").
-    /// When false, `applySymbolsAndLayout` never runs and those words are
-    /// typed as spoken.
+    /// Spoken symbol tokens ("period" -> ".", "question mark" -> "?",
+    /// "comma" -> ",") converting into glyphs. ON by default so explicit
+    /// punctuation words are honored even when the recognizer leaves them
+    /// literal. Turn it off when dictating ordinary words such as "star",
+    /// "dash" or "period"; protected collocations remain shielded either way.
     static var spokenSymbols: Bool {
-        get { defaults.object(forKey: "spokenSymbols") as? Bool ?? false }
+        get { defaults.object(forKey: "spokenSymbols") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "spokenSymbols") }
     }
 

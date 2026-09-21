@@ -177,7 +177,7 @@ final class VoiceCommandGatingTests: XCTestCase {
 
     // MARK: - Defaults
 
-    func testDefaultsAreOffForEditsAndSymbolsAndOnForLayout() {
+    func testDefaultsAreOffForEditsAndOnForLayoutAndSymbols() {
         let defaults = UserDefaults.standard
         let savedEdits = defaults.object(forKey: "spokenEdits")
         let savedLayout = defaults.object(forKey: "spokenLayout")
@@ -193,7 +193,7 @@ final class VoiceCommandGatingTests: XCTestCase {
 
         XCTAssertFalse(Settings.spokenEdits)
         XCTAssertTrue(Settings.spokenLayout)
-        XCTAssertFalse(Settings.spokenSymbols)
+        XCTAssertTrue(Settings.spokenSymbols)
     }
 
     func testSettingsRoundTripAllThreeKeys() {

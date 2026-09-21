@@ -1206,10 +1206,10 @@ struct SettingsPage: View {
                 Divider()
                 toggleRow(
                     title: "Spoken symbols",
-                    detail: "Off by default. When on, saying \"period\", " +
+                    detail: "On by default. Saying \"period\", \"question mark\", " +
                             "\"comma\", \"star\" or \"dash\" inserts the symbol " +
-                            "instead of the word. Your recognizer already " +
-                            "adds punctuation on its own.",
+                            "instead of the word. Turn off if you need those " +
+                            "words literally.",
                     isOn: Binding(
                         get: { app.spokenSymbols },
                         set: { app.setSpokenSymbols($0) }))

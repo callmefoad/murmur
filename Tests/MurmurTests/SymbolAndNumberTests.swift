@@ -37,6 +37,17 @@ final class SymbolAndNumberTests: XCTestCase {
             "Stop! Now.")
     }
 
+    func testExplicitPunctuationAndRepeatedPeriodsStayClean() {
+        XCTAssertEqual(
+            fmt(
+                "so cute period what does this week look like after 5 PM for you question mark I think I have... prayer tonight",
+                autoPeriod: true),
+            "So cute. What does this week look like after 5 PM for you? I think I have. Prayer tonight.")
+        XCTAssertEqual(
+            fmt("you question mark question mark", autoPeriod: false),
+            "You?")
+    }
+
     func testColonAndSemicolon() {
         XCTAssertEqual(
             fmt("two options colon red semicolon blue", autoPeriod: true),

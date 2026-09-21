@@ -79,6 +79,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur records your voice while you hold the dictation key so it can transcribe it on-device.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Murmur uses a contact name only after you approve a voice command, so it can open the right Messages conversation.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Murmur transcribes your speech using macOS's on-device speech recognition. Audio never leaves this Mac.</string>
     <key>NSHumanReadableCopyright</key>

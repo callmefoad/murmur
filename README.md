@@ -24,8 +24,8 @@ speech and language models, with an optional local Whisper engine.
   that", and guessing wrong destroys spoken work, so the shortcut stays
   disabled and ⌘Z is the answer. Opt in with
   `defaults write local.murmur undoWindowSeconds -float 2`.
-- **Live caption HUD** — optional floating capsule near your cursor shows a
-  waveform meter and live partial text while you speak.
+- **Dictation HUD** — optional floating microphone and waveform indicator while
+  you speak; it never displays transcript text.
 - **Two recognition engines**, both offline:
   - **Apple** — instant, built into macOS (SpeechAnalyzer, macOS 26).
   - **Whisper** — optional precision engine via
@@ -38,6 +38,10 @@ speech and language models, with an optional local Whisper engine.
   paragraph", auto-capitalization, personal dictionary, snippets
   (say a trigger phrase → paste a saved block). Cleanup rules are
   locale-aware (English, Spanish, French, German, Italian, Portuguese).
+- **Review-first screen commands** — start with “Murmur” to request a supported
+  action. The first action prepares a contact-addressed Messages draft after
+  approval; it never sends, and it falls back to copying the draft if the
+  target app is not safely focused.
 - **Cleanup levels** — Verbatim, Cleaned (default; rules only, no model),
   Polished and Tightened. Polished and above add one on-device model pass
   that cleans up dictated speech in the owner's own register. Short, clean
@@ -129,6 +133,13 @@ HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine
      TextFormatter → LearnedStore → SnippetStore → RewriteEngine (model)
                                         ↓
                      TextInserter (direct AX, clipboard + ⌘V fallback)
+
+Explicit “Murmur” commands branch before insertion into a review prompt, then
+use Contacts + Messages only after approval:
+
+```
+VoiceCommandParser → Review → Contacts → Messages draft (never send)
+```
 ```
 
 `TextFormatter` is a pure function of its arguments: every gate that reads

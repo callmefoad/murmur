@@ -50,6 +50,15 @@ transcript:
   repairs periods the recognizer invented at a breath.
 - Personal dictionary, snippets, learned corrections — `PhraseReplacer`.
 
+## 4. Screen commands are explicit and review-first
+
+Screen actions are never inferred from ordinary dictation. A command must begin
+with the wake word **“Murmur”**, match a known command grammar, and pass through
+a native review prompt showing the target and exact draft. The first executor
+can resolve a contact and prepare a Messages draft; it never sends. If Contacts
+access is unavailable or Messages is not frontmost, Murmur copies the draft
+instead of typing into an unexpected app.
+
 ## What is deliberately NOT enforced
 
 - **Tone judgement.** Whether a rewrite "sounds like him" cannot be checked

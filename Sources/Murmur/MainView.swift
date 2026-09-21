@@ -1183,7 +1183,8 @@ struct SettingsPage: View {
                 Text("Voice commands").font(.headline)
                 Text("Murmur types what you say. These let it act on what " +
                      "you say instead — it can't tell whether you meant a " +
-                     "command or just said the words.")
+                     "command or just said the words. Screen actions must " +
+                     "begin with “Murmur” and always show a review first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 toggleRow(
@@ -1422,7 +1423,9 @@ struct HelpPage: View {
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +
-                    "Punctuation is added automatically from your pauses and tone.")
+                    "For screen actions, start with “Murmur” and review the " +
+                    "preview before anything is prepared. Murmur never sends " +
+                    "a message for you.")
                 Divider()
                 helpRow("lock.shield", "Private by design",
                     "Recognition runs entirely on this Mac using Apple's on-device " +

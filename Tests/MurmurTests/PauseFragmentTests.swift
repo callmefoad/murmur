@@ -69,6 +69,13 @@ final class PauseFragmentTests: XCTestCase {
                 + "of time later if we can handle all the hard work now.")
     }
 
+    func testAdverbPauseBeforeGerundStaysConnected() {
+        XCTAssertEqual(
+            formatted(
+                "I'm purposefully. Trying to speed up and slow down some of my speech."),
+            "I'm purposefully trying to speed up and slow down some of my speech.")
+    }
+
     func testSettingOffLeavesTheBreaksAlone() {
         let input = "Now it's the primary blender. Motor."
         XCTAssertEqual(formatted(input, joinFragments: false), input)

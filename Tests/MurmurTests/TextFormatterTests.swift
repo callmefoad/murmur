@@ -9,6 +9,13 @@ final class TextFormatterTests: XCTestCase {
         XCTAssertEqual(result, "This is, a test.")
     }
 
+    func testRecognizerCapitalizationAfterCommaIsNormalized() {
+        let formatter = TextFormatter(dictionary: [:])
+        XCTAssertEqual(
+            formatter.format("so, Here's a test", autoPeriod: true),
+            "So, here's a test.")
+    }
+
     func testSpokenNewLine() {
         let formatter = TextFormatter(dictionary: [:])
         let result = formatter.format(

@@ -439,6 +439,7 @@ struct TextFormatter {
         // sentence start ("gonna" -> "going to"). Deliberately-cased values
         // like "iPhone" are protected inside capitalizeSentences itself.
         text = tidyWhitespaceAndPunctuation(in: text)
+        text = normalizeInteriorCapitalization(in: text)
         text = capitalizeSentences(in: text)
         if autoPeriod {
             text = ensureTerminalPunctuation(in: text)
@@ -566,6 +567,31 @@ struct TextFormatter {
         return result.trimmingCharacters(
             in: CharacterSet.whitespacesAndNewlines
                 .subtracting(CharacterSet(charactersIn: "\t")))
+    }
+
+    /// SpeechAnalyzer occasionally capitalizes a clause after a comma as if
+    /// the pause ended the sentence: "So, Here's a test." Lowercase only
+    /// common function words and contractions here; proper names and
+    /// deliberately cased words remain untouched.
+    private func normalizeInteriorCapitalization(in text: String) -> String {
+        let regex = try! NSRegularExpression(
+            pattern: "(?<prefix>,[ \\t]+)(?<word>[A-Za-z]+(?:['\u{2019}][A-Za-z]+)?)\\b")
+        let lowercasedWords: Set<String> = [
+            "and", "because", "but", "here's", "that's", "it's", "i've",
+            "i'll", "i'd", "we're", "we've", "we'll", "we'd", "you're",
+            "you've", "you'll", "you'd", "they're", "they've", "they'll",
+            "they'd", "he's", "she's", "there's", "what's", "who's",
+            "where's", "when's", "how's", "if", "or", "so", "though",
+            "unless", "when", "while",
+        ]
+        return Self.replaceMatches(in: text, regex: regex) { match, source in
+            guard let prefix = Self.group("prefix", of: match, in: source),
+                  let word = Self.group("word", of: match, in: source),
+                  lowercasedWords.contains(word.lowercased()) else {
+                return nil
+            }
+            return String(prefix) + word.lowercased()
+        }
     }
 
     // MARK: - Pause-fragment joining
@@ -727,16 +753,20 @@ struct TextFormatter {
     }
 
     /// Returns true when the preceding fragment visibly ends in an unfinished
-    /// coordinator, or in a coordinator followed by a discourse adverb. This
-    /// lets the repair pass follow a chain of breaths instead of stopping
-    /// after the first repaired fragment.
+    /// coordinator, a coordinator followed by a discourse adverb, or an
+    /// adverbial tail. This lets the repair pass follow a chain of breaths
+    /// instead of stopping after the first repaired fragment.
     private static func hasOpenContinuationTail(_ words: [String]) -> Bool {
         guard let last = words.last else { return false }
         if continuationOpeners.contains(last) { return true }
-        guard continuationAdverbs.contains(last), words.count > 1 else {
-            return false
+        if continuationAdverbs.contains(last) {
+            guard words.count > 1 else { return false }
+            return continuationOpeners.contains(words[words.count - 2])
         }
-        return continuationOpeners.contains(words[words.count - 2])
+        // A pause after an adverb commonly precedes the verb it modifies:
+        // "I'm purposefully. Trying to speed up…". Keep this deliberately
+        // narrow; a generic short-fragment join would erase real sentences.
+        return words.count > 1 && last.hasSuffix("ly")
     }
 
     /// Time tails such as "an unmeasurable amount of time later" are noun

@@ -646,6 +646,7 @@ struct TextFormatter {
         "bring", "brings", "brought", "meet", "meets", "met", "wait",
         "waits", "sign", "signs", "cover", "covers", "handle", "handles",
         "run", "manage", "manages", "owe", "owes", "cost", "costs",
+        "review", "reviews", "reviewed",
     ]
 
     /// Openers that leave a phrase stranded on the wrong side of a period.
@@ -661,6 +662,22 @@ struct TextFormatter {
     private static let subjectPronouns: Set<String> = [
         "i", "we", "you", "he", "she", "they", "it",
     ]
+
+    /// Short discourse adverbs that are commonly stranded by a breath after
+    /// a conjunction: "and. Really. Work on…". They are only eligible when
+    /// the sentence before them is already visibly unfinished, so a deliberate
+    /// standalone "Really." still survives.
+    private static let continuationAdverbs: Set<String> = [
+        "actually", "also", "basically", "especially", "even", "finally",
+        "just", "literally", "maybe", "now", "probably", "really", "still",
+        "then",
+    ]
+
+    /// A sentence-fragment opener that is usually an appositive or trailing
+    /// time phrase when it follows a complete clause. This is intentionally
+    /// narrower than all determiners: joining every "The …" fragment would
+    /// erase deliberate noun-phrase sentences.
+    private static let trailingNounPhraseOpeners: Set<String> = ["a", "an"]
 
     /// Stems whose "'s" is the verb "is", not a possessive.
     private static let contractiblePronouns: Set<String> = [
@@ -689,6 +706,65 @@ struct TextFormatter {
             return true
         }
         return false
+    }
+
+    /// Participles and infinitives do not make a preposition-initial fragment
+    /// an independent clause: "For the templates to be built" is still a
+    /// continuation, while "On Monday we review it again" is not.
+    private static func hasFiniteVerb(_ words: [String]) -> Bool {
+        for (index, word) in words.enumerated() {
+            guard isVerbLike(word) else { continue }
+            let lower = word.lowercased()
+            if lower == "be", index > 0, words[index - 1] == "to" {
+                continue
+            }
+            if lower.hasSuffix("ing") || lower.hasSuffix("ed") {
+                continue
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Returns true when the preceding fragment visibly ends in an unfinished
+    /// coordinator, or in a coordinator followed by a discourse adverb. This
+    /// lets the repair pass follow a chain of breaths instead of stopping
+    /// after the first repaired fragment.
+    private static func hasOpenContinuationTail(_ words: [String]) -> Bool {
+        guard let last = words.last else { return false }
+        if continuationOpeners.contains(last) { return true }
+        guard continuationAdverbs.contains(last), words.count > 1 else {
+            return false
+        }
+        return continuationOpeners.contains(words[words.count - 2])
+    }
+
+    /// Time tails such as "an unmeasurable amount of time later" are noun
+    /// phrases, not new thoughts. They are a safe continuation signal because
+    /// the phrase itself contains no finite verb.
+    private static func isTrailingTimePhrase(_ words: [String]) -> Bool {
+        guard let last = words.last else { return false }
+        return ["later", "today", "tomorrow", "yesterday", "tonight"].contains(last)
+    }
+
+    /// A prepositional opener can contain a coordinated clause of its own:
+    /// "For the templates to be built, but it will save us." The first
+    /// phrase is still attached to the sentence before it, so the period
+    /// before "For" is the recognizer's false boundary.
+    private static func hasPrefixedPrepositionalClause(_ text: String) -> Bool {
+        guard let comma = text.firstIndex(of: ",") else { return false }
+        let prefix = String(text[..<comma])
+        let prefixWords = wordTokens(prefix)
+        guard prefixWords.count <= 8,
+              let opener = prefixWords.first,
+              prepositionOpeners.contains(opener),
+              !hasFiniteVerb(prefixWords) else { return false }
+        let remainder = text[text.index(after: comma)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return continuationOpeners.contains {
+            remainder == $0 || remainder.hasPrefix("\($0) ")
+        }
     }
 
     /// Lowercased words of a sentence, stripped of edge punctuation.
@@ -758,6 +834,29 @@ struct TextFormatter {
         guard let opener = words.first else { return false }
         guard !Self.standaloneUtterances.contains(opener) else { return false }
         if Self.continuationOpeners.contains(opener) { return true }
+
+        // A breath can split a continuation more than once. Once a prior
+        // fragment ends in "and" or "and really", keep following a short
+        // adverb/verb fragment so "and. Really. Work on…" becomes one thought.
+        if Self.hasOpenContinuationTail(Self.wordTokens(String(stem))) {
+            if Self.continuationAdverbs.contains(opener)
+                || Self.isVerbLike(opener)
+                || Self.prepositionOpeners.contains(opener) {
+                return true
+            }
+        }
+        if Self.prepositionOpeners.contains(opener) {
+            // A stranded phrase: "For the whole kitchen." It cannot be a
+            // sentence, so join it — but only while it is short enough to be
+            // one breath's worth, which keeps real preposition-initial
+            // sentences ("On Monday we review the numbers again.") intact.
+            // Participles/infinitives do not make the fragment independent:
+            // "For the templates to be built" is still a continuation.
+            if words.count <= 8, !Self.hasFiniteVerb(words) {
+                return !words.contains(where: Self.subjectPronouns.contains)
+            }
+            return Self.hasPrefixedPrepositionalClause(next)
+        }
         // Otherwise the fragment has to have no finite verb and no subject
         // of its own: both are marks of a clause that can stand alone, and
         // "Best purchase this year." is a real sentence even though it has
@@ -767,12 +866,9 @@ struct TextFormatter {
         guard !words.contains(where: Self.subjectPronouns.contains) else {
             return false
         }
-        if Self.prepositionOpeners.contains(opener) {
-            // A stranded phrase: "For the whole kitchen." It cannot be a
-            // sentence, so join it — but only while it is short enough to be
-            // one breath's worth, which keeps real preposition-initial
-            // sentences ("On Monday we review the numbers again.") intact.
-            return words.count <= 5
+        if Self.isTrailingTimePhrase(words),
+           Self.trailingNounPhraseOpeners.contains(opener) {
+            return terminator == "."
         }
         // A bare noun with nothing hanging off it: "Manager.",
         // "The manager." Anything longer reads as a deliberate

@@ -50,6 +50,25 @@ final class PauseFragmentTests: XCTestCase {
             "I would appreciate it if I make a pause, keep listening.")
     }
 
+    /// A real dictation can accumulate several prosodic breaks in one
+    /// sentence. The repair must keep following the chain instead of fixing
+    /// only the first one: "and. Really. Work…", then a long prepositional
+    /// tail, then a trailing time phrase and subordinate clause.
+    func testChainedPauseFragmentsStayInOneThought() {
+        XCTAssertEqual(
+            formatted(
+                "I also hope that you're saving every single part of this. "
+                + "I'm glad that you and I are taking the time to go through, and. "
+                + "Really. Work on this entire thing. I know that it takes hours and hours. "
+                + "For the templates to be built, but it will save us. "
+                + "An unmeasurable amount of time later. If we can handle all the hard work now."),
+            "I also hope that you're saving every single part of this. "
+                + "I'm glad that you and I are taking the time to go through, and really "
+                + "work on this entire thing. I know that it takes hours and hours for "
+                + "the templates to be built, but it will save us an unmeasurable amount "
+                + "of time later if we can handle all the hard work now.")
+    }
+
     func testSettingOffLeavesTheBreaksAlone() {
         let input = "Now it's the primary blender. Motor."
         XCTAssertEqual(formatted(input, joinFragments: false), input)

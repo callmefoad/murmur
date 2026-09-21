@@ -588,12 +588,13 @@ struct TextFormatter {
             .joined(separator: "\n")
     }
 
-    /// Sentence openers that mark a continuation of the previous sentence.
-    /// Deliberately only pure coordinators: each can legitimately open a
-    /// sentence in edited prose, but a period in front of one in *dictation*
-    /// is nearly always a pause the recognizer punctuated.
+    /// Clause openers that almost always continue the thought before them in
+    /// speech. A breath before one is not enough evidence for a new sentence;
+    /// the whole clause is more useful than the recognizer's early guess.
     private static let continuationOpeners: Set<String> = [
-        "and", "but", "or", "nor", "so", "yet", "plus", "because",
+        "and", "but", "or", "nor", "so", "yet", "plus", "because", "if",
+        "when", "while", "although", "though", "unless", "until", "before",
+        "after", "since", "as",
     ]
 
     /// Utterances that stand alone as a whole sentence, so a short verbless
@@ -702,42 +703,49 @@ struct TextFormatter {
             .filter { !$0.isEmpty }
     }
 
-    /// Splits a line after every period that is followed by whitespace,
-    /// keeping each period with the text before it and each run of
+    /// Splits a line after every sentence mark that is followed by whitespace,
+    /// keeping each mark with the text before it and each run of
     /// whitespace as that piece's trailing separator, so a line that is
     /// left unjoined is reassembled byte for byte.
-    private static func periodPieces(_ line: String) -> [(text: String, separator: String)] {
+    private static func sentencePieces(_ line: String) -> [(text: String, separator: String)] {
         let text = line as NSString
-        guard let regex = try? NSRegularExpression(pattern: "\\.[ \t]+") else {
+        guard let regex = try? NSRegularExpression(pattern: "[.!?][ \\t]+") else {
             return [(line, "")]
         }
         var pieces: [(text: String, separator: String)] = []
         var start = 0
         for match in regex.matches(
             in: line, range: NSRange(location: 0, length: text.length)) {
-            let periodEnd = match.range.location + 1
+            let markEnd = match.range.location + 1
             pieces.append((
                 text: text.substring(with: NSRange(
-                    location: start, length: periodEnd - start)),
+                    location: start, length: markEnd - start)),
                 separator: text.substring(with: NSRange(
-                    location: periodEnd,
-                    length: match.range.location + match.range.length - periodEnd))))
+                    location: markEnd,
+                    length: match.range.location + match.range.length - markEnd))))
             start = match.range.location + match.range.length
         }
         pieces.append((text: text.substring(from: start), separator: ""))
         return pieces
     }
 
-    /// Whether the period between `previous` and `next` is a pause the
-    /// recognizer punctuated rather than a real sentence boundary.
+    /// Whether the sentence mark between `previous` and `next` is a pause the
+    /// recognizer punctuated rather than a real sentence boundary. Speech
+    /// recognition can emit `?` for a rising intonation before a speaker
+    /// finishes the same question ("What should we fix? On the website?").
     static func shouldJoin(previous: String, next: String) -> Bool {
-        guard previous.hasSuffix("."), !next.isEmpty else { return false }
+        guard let terminator = previous.last,
+              ".!?".contains(terminator), !next.isEmpty else { return false }
         let stem = previous.dropLast()
         // An ellipsis is deliberate; a decimal or an initial is not a
-        // sentence end at all.
-        guard let tail = stem.last, tail != "." else { return false }
+        // sentence end at all. Abbreviation checks only apply to periods —
+        // a question/exclamation mark cannot be part of "Dr." or "etc.".
+        if terminator == "." {
+            guard let tail = stem.last, tail != "." else { return false }
+        }
         guard let lastWord = Self.wordTokens(String(stem)).last else { return false }
-        guard lastWord.count > 1, !Self.abbreviations.contains(lastWord) else {
+        guard lastWord.count > 1 else { return false }
+        if terminator == ".", Self.abbreviations.contains(lastWord) {
             return false
         }
         // A recognizer that inserts a period capitalizes the word after it,
@@ -769,7 +777,11 @@ struct TextFormatter {
         // A bare noun with nothing hanging off it: "Manager.",
         // "The manager." Anything longer reads as a deliberate
         // noun-phrase sentence and is left alone.
-        return words.count <= 2
+        // Do not apply this permissive period rule after a question or
+        // exclamation: "Who runs it? Manager." is a real two-part exchange,
+        // while a question's continuation is handled by a clause/preposition
+        // opener above.
+        return terminator == "." && words.count <= 2
     }
 
     /// Joins `next` onto `previous`, dropping the period between them and
@@ -804,7 +816,7 @@ struct TextFormatter {
     }
 
     static func joinFragments(inLine line: String) -> String {
-        let pieces = periodPieces(line)
+        let pieces = sentencePieces(line)
         guard pieces.count > 1 else { return line }
         var result = pieces[0].text
         var separator = pieces[0].separator

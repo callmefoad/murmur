@@ -31,6 +31,25 @@ final class PauseFragmentTests: XCTestCase {
             + "it's 40% quieter and we're keeping the old one on the shelf.")
     }
 
+    /// A rising intonation can make SpeechAnalyzer emit a question mark at a
+    /// breath before the final prepositional tail. Keep the question intact.
+    func testQuestionPauseBeforeTailStaysOneQuestion() {
+        XCTAssertEqual(
+            formatted(
+                "You're awesome. That works, and I think they're taking a look "
+                + "at it right now. What else do we need to fix? On the website?"),
+            "You're awesome. That works, and I think they're taking a look at "
+                + "it right now. What else do we need to fix on the website?")
+    }
+
+    /// Subordinate clauses belong to the thought before them even when the
+    /// speaker takes a breath after the main clause.
+    func testSubordinateClauseAfterPauseStaysConnected() {
+        XCTAssertEqual(
+            formatted("I would appreciate it. If I make a pause, keep listening."),
+            "I would appreciate it if I make a pause, keep listening.")
+    }
+
     func testSettingOffLeavesTheBreaksAlone() {
         let input = "Now it's the primary blender. Motor."
         XCTAssertEqual(formatted(input, joinFragments: false), input)
@@ -130,7 +149,7 @@ final class PauseFragmentTests: XCTestCase {
 
     // MARK: - Pure decision logic
 
-    func testShouldJoinRequiresATrailingPeriod() {
+    func testQuestionWithStandaloneFollowupStaysSeparate() {
         XCTAssertFalse(
             TextFormatter.shouldJoin(previous: "Who runs it?", next: "Manager."))
     }

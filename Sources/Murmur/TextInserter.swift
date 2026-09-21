@@ -168,6 +168,99 @@ enum TextInserter {
         "AXTextField", "AXTextArea", "AXComboBox", "AXWebArea",
     ]
 
+    /// Whether the focused element is a writable text target. Command mode
+    /// uses this as a readiness signal while Messages finishes selecting the
+    /// requested conversation; it avoids claiming a draft was inserted when
+    /// the app is frontmost but its composer has not received focus yet.
+    static func hasFocusedEditableElement() -> Bool {
+        guard AXIsProcessTrusted(), let element = focusedElement() else { return false }
+
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &settable) == .success,
+            settable.boolValue
+        else {
+            return false
+        }
+
+        var roleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &roleRef) == .success,
+            let role = roleRef as? String
+        else {
+            return false
+        }
+        return axInsertableRoles.contains(role)
+    }
+
+    /// Gives an app's multiline editor focus when it has opened a document or
+    /// conversation but left focus on the window itself. The caller must have
+    /// already constrained the operation to the intended frontmost app.
+    /// Multiline areas are preferred over single-line fields so an app's
+    /// search box is not selected ahead of its composer.
+    @discardableResult
+    static func focusFirstEditableElement(in processIdentifier: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let application = AXUIElementCreateApplication(processIdentifier)
+        let windows = elementsAttribute(application, kAXWindowsAttribute as CFString)
+
+        for roles in [["AXTextArea"], ["AXTextField", "AXComboBox"]] {
+            for window in windows {
+                if let element = findEditableElement(
+                    in: window, roles: Set(roles), depth: 0, visited: 0) {
+                    guard AXUIElementSetAttributeValue(
+                        element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+                    else { continue }
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func elementsAttribute(
+        _ element: AXUIElement, _ attribute: CFString
+    ) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value
+        else { return [] }
+        return value as? [AXUIElement] ?? []
+    }
+
+    private static func findEditableElement(
+        in element: AXUIElement,
+        roles: Set<String>,
+        depth: Int,
+        visited: Int
+    ) -> AXUIElement? {
+        guard depth < 10, visited < 500 else { return nil }
+
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &roleRef) == .success,
+           let role = roleRef as? String,
+           roles.contains(role),
+           isWritableTextElement(element) {
+            return element
+        }
+
+        for child in elementsAttribute(element, kAXChildrenAttribute as CFString) {
+            if let match = findEditableElement(
+                in: child, roles: roles, depth: depth + 1, visited: visited + 1) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private static func isWritableTextElement(_ element: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &settable) == .success
+            && settable.boolValue
+    }
+
     /// Attempts to insert `text` at the caret of the focused element via
     /// the Accessibility API, replacing only the current selection (which
     /// is empty at a plain caret) rather than the field's whole value.

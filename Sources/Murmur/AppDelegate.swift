@@ -108,44 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
     }
 
-    /// Native review gate for voice commands. The preview is deliberately an
-    /// alert rather than a silent action: the user sees the target and exact
-    /// draft, then chooses whether Murmur may prepare it in Messages.
-    private func presentVoiceCommand(_ command: VoiceCommand) {
-        let alert = NSAlert()
-        alert.messageText = "Review voice command"
-        alert.informativeText =
-            "Open Messages with \(command.contactName) and prepare this draft?\n\n"
-            + "\u{201c}\(command.draft)\u{201d}\n\n"
-            + "Murmur will not send it."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open Messages & Prepare Draft")
-        alert.addButton(withTitle: "Copy Draft")
-        alert.addButton(withTitle: "Cancel")
-
-        let respond: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self else { return }
-            switch response {
-            case .alertFirstButtonReturn:
-                self.prepareVoiceCommand(command)
-            case .alertSecondButtonReturn:
-                TextInserter.place(command.draft)
-                self.flashTransformStatus("Draft copied — paste it when ready.")
-            default:
-                break
-            }
-        }
-
-        NSApp.activate(ignoringOtherApps: true)
-        if let window {
-            alert.beginSheetModal(for: window) { response in
-                Task { @MainActor in respond(response) }
-            }
-        } else {
-            respond(alert.runModal())
-        }
-    }
-
     private func prepareVoiceCommand(_ command: VoiceCommand) {
         transformStatus = "Preparing Messages draft…"
         Task { @MainActor [weak self] in
@@ -1061,13 +1023,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     }.value
                 telemetry.finish("rules")
 
-                // Explicitly addressed commands leave the normal insertion
-                // path. They are shown for approval first; no command is
-                // executed, copied, or sent merely because it was spoken.
+                // The explicit wake word is the approval gate. A command is
+                // never inferred from ordinary dictation, and execution still
+                // stops at a reviewable draft — Murmur never sends messages.
                 if let command = VoiceCommandParser.parse(formatted) {
                     uiState = .idle
                     telemetry.commit(wordCount: 0, usedModel: false, inserted: false)
-                    presentVoiceCommand(command)
+                    prepareVoiceCommand(command)
                     return
                 }
 

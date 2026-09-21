@@ -1184,7 +1184,8 @@ struct SettingsPage: View {
                 Text("Murmur types what you say. These let it act on what " +
                      "you say instead — it can't tell whether you meant a " +
                      "command or just said the words. Screen actions must " +
-                     "begin with “Murmur” and always show a review first.")
+                     "begin with “Murmur”; that wake word authorizes a " +
+                     "draft-only action. Murmur never sends messages.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 toggleRow(
@@ -1423,9 +1424,9 @@ struct HelpPage: View {
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +
-                    "For screen actions, start with “Murmur” and review the " +
-                    "preview before anything is prepared. Murmur never sends " +
-                    "a message for you.")
+                    "For screen actions, start with “Murmur”; it opens the " +
+                    "requested app and prepares a reviewable draft. Murmur " +
+                    "never sends a message for you.")
                 Divider()
                 helpRow("lock.shield", "Private by design",
                     "Recognition runs entirely on this Mac using Apple's on-device " +

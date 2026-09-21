@@ -38,10 +38,10 @@ speech and language models, with an optional local Whisper engine.
   paragraph", auto-capitalization, personal dictionary, snippets
   (say a trigger phrase → paste a saved block). Cleanup rules are
   locale-aware (English, Spanish, French, German, Italian, Portuguese).
-- **Review-first screen commands** — start with “Murmur” to request a supported
-  action. The first action prepares a contact-addressed Messages draft after
-  approval; it never sends, and it falls back to copying the draft if the
-  target app is not safely focused.
+- **Wake-word screen commands** — start with “Murmur” to request a supported
+  action. The explicit wake word authorizes the action: Murmur prepares a
+  contact-addressed Messages draft immediately, never sends, and falls back to
+  copying the draft if the target app is not safely focused.
 - **Cleanup levels** — Verbatim, Cleaned (default; rules only, no model),
   Polished and Tightened. Polished and above add one on-device model pass
   that cleans up dictated speech in the owner's own register. Short, clean
@@ -134,11 +134,11 @@ HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine
                                         ↓
                      TextInserter (direct AX, clipboard + ⌘V fallback)
 
-Explicit “Murmur” commands branch before insertion into a review prompt, then
-use Contacts + Messages only after approval:
+Explicit “Murmur” commands branch before insertion, then use Contacts +
+Messages to prepare a reviewable draft without ever sending it:
 
 ```
-VoiceCommandParser → Review → Contacts → Messages draft (never send)
+VoiceCommandParser → Contacts → Messages draft (never send)
 ```
 ```
 

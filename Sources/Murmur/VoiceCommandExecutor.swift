@@ -27,9 +27,9 @@ enum VoiceCommandExecutor {
     }
 
     /// Opens Messages for the contact when Contacts can resolve an address.
-    /// After a short app-activation grace period, it inserts the draft only if
-    /// Messages is actually frontmost. Otherwise the draft is copied, which
-    /// is safer than typing into an unexpected application.
+    /// After the app opens, waits for Messages and its composer to become
+    /// ready before inserting. Otherwise the draft is copied, which is safer
+    /// than typing into an unexpected application or falsely claiming success.
     static func prepareMessageDraft(
         contactName: String,
         draft: String
@@ -37,20 +37,36 @@ enum VoiceCommandExecutor {
         let destination = await resolveContact(named: contactName)
         let openedAddressedConversation = openMessages(for: destination?.address)
 
-        // Give the Messages URL/app activation a chance to settle before
-        // touching the focused field. This is the only intentional wait in
-        // command mode, and it happens after the user approved the preview.
-        try? await Task.sleep(nanoseconds: 700_000_000)
-        guard openedAddressedConversation,
-              NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                == "com.apple.MobileSMS",
-              AXIsProcessTrusted() else {
+        guard openedAddressedConversation else {
             TextInserter.place(draft)
             return .copied
         }
 
-        _ = TextInserter.insert(draft)
-        return .placed(displayName: destination?.displayName ?? contactName)
+        // Messages can report itself as frontmost before the conversation's
+        // composer is focused. Poll briefly rather than racing that handoff;
+        // this keeps the fast path quick while making the common URL-launch
+        // case reliable.
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                    == "com.apple.MobileSMS"
+            else { continue }
+
+            if TextInserter.hasFocusedEditableElement() {
+                _ = TextInserter.insert(draft)
+                return .placed(displayName: destination?.displayName ?? contactName)
+            }
+
+            // An addressed sms: URL can select the right conversation without
+            // focusing its composer. Ask Messages' accessibility tree for the
+            // multiline editor, then let the next poll verify that focus moved
+            // before any text is written.
+            _ = TextInserter.focusFirstEditableElement(
+                in: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+        }
+
+        TextInserter.place(draft)
+        return .copied
     }
 
     /// Contact lookup is intentionally deferred until the user approves the

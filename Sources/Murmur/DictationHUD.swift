@@ -93,7 +93,9 @@ final class DictationHUD {
     private func makePanelIfNeeded() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 64),
+            // Match the physical notch rather than stretching a wide HUD
+            // across the menu bar; the indicator remains centered inside.
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 64),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.isOpaque = false

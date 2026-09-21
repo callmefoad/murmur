@@ -3,26 +3,47 @@ import ApplicationServices
 import Contacts
 import Foundation
 
-/// Resolves a spoken contact name and prepares a message draft. Sending is
-/// deliberately absent from this API: the user must see and send the message
-/// themselves in Messages.
+/// Resolves a spoken contact name and opens Messages or prepares a draft.
+/// Sending is deliberately absent from this API: the user must see and send
+/// the message themselves in Messages.
 enum VoiceCommandExecutor {
     struct ContactDestination: Equatable {
         let displayName: String
         let address: String
     }
 
-    enum PreparationResult: Equatable {
+    enum ExecutionResult: Equatable {
+        case opened(displayName: String, addressed: Bool)
         case placed(displayName: String)
         case copied
 
         var status: String {
             switch self {
+            case .opened(let displayName, true):
+                return "Opened Messages with \(displayName)."
+            case .opened(let displayName, false):
+                return "Opened Messages — choose \(displayName) to continue."
             case .placed(let displayName):
                 return "Draft placed in Messages with \(displayName) — review before sending."
             case .copied:
                 return "Draft copied — open Messages, choose the contact, and paste to review."
             }
+        }
+    }
+
+    /// Executes a parsed command. The hotkey or spoken wake word is the
+    /// authorization; there is no additional confirmation prompt, and there
+    /// is still no send operation.
+    static func execute(_ command: VoiceCommand) async -> ExecutionResult {
+        switch command.action {
+        case .openMessages(let contactName):
+            let destination = await resolveContact(named: contactName)
+            let addressed = openMessages(for: destination?.address)
+            return .opened(
+                displayName: destination?.displayName ?? contactName,
+                addressed: addressed)
+        case .message(let contactName, let draft):
+            return await prepareMessageDraft(contactName: contactName, draft: draft)
         }
     }
 
@@ -33,7 +54,7 @@ enum VoiceCommandExecutor {
     static func prepareMessageDraft(
         contactName: String,
         draft: String
-    ) async -> PreparationResult {
+    ) async -> ExecutionResult {
         let destination = await resolveContact(named: contactName)
         let openedAddressedConversation = openMessages(for: destination?.address)
 
@@ -69,9 +90,9 @@ enum VoiceCommandExecutor {
         return .copied
     }
 
-    /// Contact lookup is intentionally deferred until the user approves the
-    /// preview. The first command may prompt for Contacts access; denying it
-    /// simply falls back to opening Messages and copying the draft.
+    /// Contact lookup is deferred until a hotkey-authorized command is ready
+    /// to execute. The first command may prompt for Contacts access; denying
+    /// it simply falls back to opening Messages and copying the draft.
     private static func resolveContact(named name: String) async -> ContactDestination? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

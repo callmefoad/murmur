@@ -1,10 +1,12 @@
 import Foundation
 
-/// A command is only created when the speaker explicitly addresses Murmur by
-/// name. Ordinary dictation never enters this type and therefore cannot cause
-/// an app action by accident.
+/// A command is only created from the strict screen-action grammar. The
+/// caller supplies the authorization (the Murmur hotkey by default, or an
+/// optional spoken wake word); ordinary dictation outside that grammar cannot
+/// cause an app action by accident.
 struct VoiceCommand: Equatable, Identifiable {
     enum Action: Equatable {
+        case openMessages(contact: String)
         case message(contact: String, draft: String)
     }
 
@@ -12,6 +14,8 @@ struct VoiceCommand: Equatable, Identifiable {
 
     var id: String {
         switch action {
+        case .openMessages(let contact):
+            return "open-messages|\(contact.lowercased())"
         case .message(let contact, let draft):
             return "message|\(contact.lowercased())|\(draft.lowercased())"
         }
@@ -19,22 +23,35 @@ struct VoiceCommand: Equatable, Identifiable {
 
     var contactName: String {
         switch action {
+        case .openMessages(let contact): return contact
         case .message(let contact, _): return contact
         }
     }
 
     var draft: String {
         switch action {
+        case .openMessages: return ""
         case .message(_, let draft): return draft
         }
     }
 }
 
-/// Conservative first-pass parser for the explicit command surface. It is
-/// intentionally grammar-based instead of model-based: command boundaries
-/// stay deterministic, local, and testable, and a malformed command simply
-/// falls through as ordinary dictation.
+/// Conservative grammar parser for the explicit command surface. It is
+/// intentionally not model-based: command boundaries stay deterministic,
+/// local, and testable, and malformed speech falls through as dictation.
 enum VoiceCommandParser {
+    enum Authorization: Equatable {
+        /// The transcript itself starts with a spoken wake word.
+        case spokenWakeWord
+        /// The Murmur hotkey already authorized this recording, so no spoken
+        /// name is needed. The command grammar remains strict either way.
+        case hotkey
+    }
+
+    private static let wakeWords: Set<String> = [
+        "murmur", "murmer", "murmor",
+    ]
+
     private static let messagePrefixes = [
         "open up my text messages with ",
         "open my text messages with ",
@@ -51,9 +68,22 @@ enum VoiceCommandParser {
     ]
 
     /// Parses commands such as:
-    /// `Murmur, open up my text messages with Isaiah and ask him who ...`
-    static func parse(_ text: String) -> VoiceCommand? {
-        guard let body = addressedBody(from: text) else { return nil }
+    /// `open up my text messages with Isaiah and ask him who ...`
+    /// when the hotkey authorized the recording, or the same sentence prefixed
+    /// by “Murmur”/a common recognition variant.
+    static func parse(
+        _ text: String,
+        authorization: Authorization = .spokenWakeWord
+    ) -> VoiceCommand? {
+        let body: String
+        if let addressed = addressedBody(from: text) {
+            body = addressed
+        } else if authorization == .hotkey {
+            body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            return nil
+        }
+
         var command = body
         for prefix in ["i need you to ", "please "] {
             if command.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil {
@@ -68,10 +98,14 @@ enum VoiceCommandParser {
         let remainder = String(command.dropFirst(prefix.count))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        guard !remainder.isEmpty else { return nil }
+
         guard let marker = remainder.range(
             of: #"(?:\s+and\s+|[.!?]\s+)(?:ask|tell|send)\s+(?:him|her|them)\s+"#,
             options: [.regularExpression, .caseInsensitive]) else {
-            return nil
+            let contact = remainder.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
+                .union(CharacterSet(charactersIn: ",.!?")))
+            return contact.isEmpty ? nil : VoiceCommand(action: .openMessages(contact: contact))
         }
         let contact = remainder[..<marker.lowerBound]
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
@@ -89,7 +123,7 @@ enum VoiceCommandParser {
                    whereSeparator: { $0.isWhitespace })
         guard let first = pieces.first?.trimmingCharacters(
             in: CharacterSet.alphanumerics.inverted),
-              first.lowercased() == "murmur" else {
+              wakeWords.contains(first.lowercased()) else {
             return nil
         }
         guard pieces.count == 2 else { return nil }

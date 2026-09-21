@@ -50,15 +50,17 @@ transcript:
   repairs periods the recognizer invented at a breath.
 - Personal dictionary, snippets, learned corrections — `PhraseReplacer`.
 
-## 4. Screen commands are explicit and draft-only
+## 4. Screen commands are explicit and hotkey-authorized
 
-Screen actions are never inferred from ordinary dictation. A command must begin
-with the wake word **“Murmur”** and match a known command grammar. That explicit
-wake word is the authorization gate, so there is no repeated confirmation
-prompt. The executor resolves a contact and prepares a Messages draft; it
-never sends. If Contacts access is unavailable or Messages' composer cannot be
-focused safely, Murmur copies the draft instead of typing into an unexpected
-app.
+Screen actions are never inferred from arbitrary ordinary dictation. The Murmur
+hotkey is the authorization gate, so the recording can simply say “open up my
+text messages with Shannon” or add a request such as “and ask him…”. The
+grammar remains strict, there is no repeated confirmation prompt, and saying
+“Murmur” or the common recognition variant “Murmer” remains supported as an
+optional prefix. The executor resolves a contact, opens Messages, and prepares
+a draft when requested; it never sends. If Contacts access is unavailable or
+Messages' composer cannot be focused safely, Murmur copies the draft instead
+of typing into an unexpected app.
 
 ## What is deliberately NOT enforced
 

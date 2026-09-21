@@ -108,11 +108,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
     }
 
-    private func prepareVoiceCommand(_ command: VoiceCommand) {
-        transformStatus = "Preparing Messages draft…"
+    private func executeVoiceCommand(_ command: VoiceCommand) {
+        switch command.action {
+        case .openMessages:
+            transformStatus = "Opening Messages…"
+        case .message:
+            transformStatus = "Preparing Messages draft…"
+        }
         Task { @MainActor [weak self] in
-            let result = await VoiceCommandExecutor.prepareMessageDraft(
-                contactName: command.contactName, draft: command.draft)
+            let result = await VoiceCommandExecutor.execute(command)
             guard let self else { return }
             self.flashTransformStatus(result.status)
         }
@@ -1023,13 +1027,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     }.value
                 telemetry.finish("rules")
 
-                // The explicit wake word is the approval gate. A command is
-                // never inferred from ordinary dictation, and execution still
-                // stops at a reviewable draft — Murmur never sends messages.
-                if let command = VoiceCommandParser.parse(formatted) {
+                // The held Murmur hotkey is the authorization gate. The
+                // grammar stays strict so ordinary dictation is untouched,
+                // while the spoken name remains an optional compatibility
+                // prefix for users who say it.
+                if let command = VoiceCommandParser.parse(
+                    formatted, authorization: .hotkey) {
                     uiState = .idle
                     telemetry.commit(wordCount: 0, usedModel: false, inserted: false)
-                    prepareVoiceCommand(command)
+                    executeVoiceCommand(command)
                     return
                 }
 

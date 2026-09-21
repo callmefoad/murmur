@@ -108,20 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
     }
 
-    private func executeVoiceCommand(_ command: VoiceCommand) {
-        switch command.action {
-        case .openMessages:
-            transformStatus = "Opening Messages…"
-        case .message:
-            transformStatus = "Preparing Messages draft…"
-        }
-        Task { @MainActor [weak self] in
-            let result = await VoiceCommandExecutor.execute(command)
-            guard let self else { return }
-            self.flashTransformStatus(result.status)
-        }
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
         HistoryStore.flushPendingWrites()
         StatsStore.flushPendingWrites()
@@ -1026,16 +1012,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     return SnippetStore.expand(in: text)
                     }.value
                 telemetry.finish("rules")
-
-                // The spoken Murmur keyword is the authorization gate. The
-                // grammar stays strict so ordinary FN dictation is always
-                // audio-to-text and never triggers a screen action.
-                if let command = VoiceCommandParser.parse(formatted) {
-                    uiState = .idle
-                    telemetry.commit(wordCount: 0, usedModel: false, inserted: false)
-                    executeVoiceCommand(command)
-                    return
-                }
 
                 // Spoken edit commands ("scratch that", "delete last
                 // sentence") act on the cleaned text before any model pass:

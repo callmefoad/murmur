@@ -1180,13 +1180,10 @@ struct SettingsPage: View {
             .card()
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Voice commands").font(.headline)
+                Text("Spoken controls").font(.headline)
                 Text("Murmur types what you say. These let it act on what " +
-                     "you say instead — it can't tell whether you meant a " +
-                     "command or just said the words. Screen actions must " +
-                     "begin with the spoken keyword “Murmur”; ordinary FN " +
-                     "dictation never triggers them. Murmur never sends " +
-                     "messages.")
+                     "you say instead. Spoken layout adds line breaks, and " +
+                     "optional spoken edits can remove the last dictation.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 toggleRow(
@@ -1423,11 +1420,9 @@ struct HelpPage: View {
                     "speech into your finished thought. Two quick taps also arm the " +
                     "next hold, then Murmur returns to Fast.")
                 Divider()
-                helpRow("text.insert", "Voice commands",
-                    "Say “new line” or “new paragraph” to add line breaks. " +
-                    "For screen actions, say “Murmur” followed by the " +
-                    "command; it opens the requested app and prepares a " +
-                    "reviewable draft. Murmur never sends a message for you.")
+                helpRow("text.insert", "Spoken layout",
+                    "Say “new line” or “new paragraph” to add line breaks " +
+                    "while dictating.")
                 Divider()
                 helpRow("lock.shield", "Private by design",
                     "Recognition runs entirely on this Mac using Apple's on-device " +

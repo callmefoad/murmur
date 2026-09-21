@@ -50,19 +50,7 @@ transcript:
   repairs periods the recognizer invented at a breath.
 - Personal dictionary, snippets, learned corrections — `PhraseReplacer`.
 
-## 4. Screen commands are explicit and keyword-authorized
-
-Screen actions are never inferred from ordinary dictation. The recording must
-begin with the spoken keyword **“Murmur”** (or the common recognition variant
-“Murmer”), followed by a known command such as “open up my text messages with
-Shannon” or “and ask him…”. The grammar remains strict, there is no repeated
-confirmation prompt, and the FN hotkey alone never authorizes a screen action.
-The executor resolves a contact, opens Messages, and prepares a draft when
-requested; it never sends. If Contacts access is unavailable or Messages'
-composer cannot be focused safely, Murmur copies the draft instead of typing
-into an unexpected app.
-
-## What is deliberately NOT enforced
+## 4. What is deliberately NOT enforced
 
 - **Tone judgement.** Whether a rewrite "sounds like him" cannot be checked
   mechanically. That is what the prompt and the guide are for.

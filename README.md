@@ -38,12 +38,6 @@ speech and language models, with an optional local Whisper engine.
   paragraph", auto-capitalization, personal dictionary, snippets
   (say a trigger phrase → paste a saved block). Cleanup rules are
   locale-aware (English, Spanish, French, German, Italian, Portuguese).
-- **Keyword-authorized screen commands** — say “Murmur” (or a common
-  recognition variant such as “Murmer”) before a supported command. Ordinary
-  FN dictation never triggers screen actions. Murmur can open a
-  contact-addressed Messages conversation or prepare a draft immediately,
-  never sends, and falls back to copying the draft if the target app is not
-  safely focused.
 - **Cleanup levels** — Verbatim, Cleaned (default; rules only, no model),
   Polished and Tightened. Polished and above add one on-device model pass
   that cleans up dictated speech in the owner's own register. Short, clean
@@ -135,14 +129,6 @@ HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine
      TextFormatter → LearnedStore → SnippetStore → RewriteEngine (model)
                                         ↓
                      TextInserter (direct AX, clipboard + ⌘V fallback)
-
-Keyword-authorized commands branch before insertion, then use Contacts +
-Messages to open a conversation or prepare a reviewable draft without ever
-sending it:
-
-```
-VoiceCommandParser → Contacts → Messages conversation/draft (never send)
-```
 ```
 
 `TextFormatter` is a pure function of its arguments: every gate that reads

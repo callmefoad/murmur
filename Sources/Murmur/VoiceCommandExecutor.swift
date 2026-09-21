@@ -166,8 +166,17 @@ enum VoiceCommandExecutor {
         if let address, !address.isEmpty {
             let encoded = address.addingPercentEncoding(
                 withAllowedCharacters: .urlPathAllowed) ?? address
-            if let url = URL(string: "sms:\(encoded)"), NSWorkspace.shared.open(url) {
-                return true
+            // macOS Messages does not consistently honor the documented iOS
+            // `sms:` deep link. Its native iMessage route is the reliable
+            // first choice; the two SMS spellings cover carrier and older
+            // macOS handlers without ever putting message text in a URL.
+            let conversationURLs = [
+                URL(string: "imessage://\(encoded)"),
+                URL(string: "sms://\(encoded)"),
+                URL(string: "sms:\(encoded)"),
+            ]
+            for url in conversationURLs.compactMap({ $0 }) {
+                if NSWorkspace.shared.open(url) { return true }
             }
         }
 

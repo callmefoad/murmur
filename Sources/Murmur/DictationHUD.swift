@@ -123,8 +123,10 @@ final class DictationHUD {
         let inset = screen.safeAreaInsets.top
         var size = panel.frame.size
         if DictationHUDLayout.isNotched(topSafeInset: inset) {
-            // Grow upward into the notch zone: the strip spans from the very
-            // top of the display down past the cut-out, so there is no seam.
+            // Match the actual notch width for the current display mode and
+            // cover exactly the notch depth plus the 39-point menu bar row.
+            size.width = DictationHUDLayout.notchWidth(
+                screen: screen, fallback: panel.frame.width)
             size.height = inset + Self.notchHangHeight
         }
         let origin = DictationHUDLayout.hudOrigin(
@@ -136,8 +138,8 @@ final class DictationHUD {
         return CGRect(origin: origin, size: size)
     }
 
-    /// Points the black strip hangs below the notch's bottom edge.
-    private static let notchHangHeight: CGFloat = 46
+    /// The 16-inch MacBook Pro menu-bar row is 39 points tall.
+    private static let notchHangHeight: CGFloat = 39
 }
 
 // MARK: - Placement geometry
@@ -150,6 +152,16 @@ enum DictationHUDLayout {
     /// epsilon guards against rounding noise.
     static func isNotched(topSafeInset: CGFloat) -> Bool {
         topSafeInset > 0.5
+    }
+
+    /// Derives the current notch width from AppKit's auxiliary top areas.
+    /// Display scaling changes the point width, so a fixed constant is only
+    /// correct in one resolution mode.
+    static func notchWidth(screen: NSScreen, fallback: CGFloat) -> CGFloat {
+        let width = screen.frame.width
+            - (screen.auxiliaryTopLeftArea?.width ?? 0)
+            - (screen.auxiliaryTopRightArea?.width ?? 0)
+        return width > 0 ? width : fallback
     }
 
     /// Top-centre origin for a panel of `hudSize`, in AppKit coordinates:

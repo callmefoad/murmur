@@ -4,7 +4,6 @@ import SwiftUI
 /// Model driving the dictation HUD's SwiftUI content.
 private final class HUDModel: ObservableObject {
     @Published var level: Float = 0
-    @Published var caption: String = ""
     /// True on notched displays: the HUD renders as a solid-black strip
     /// fused to the notch bezel instead of a floating capsule.
     @Published var notchMode = false
@@ -14,11 +13,10 @@ private final class HUDModel: ObservableObject {
 }
 
 /// Caps-lock-style floating indicator shown while dictating: a live input
-/// meter plus, when streaming recognition is active, the partial transcript
-/// as it arrives.
+/// meter without a transcript preview.
 ///
-/// Lifecycle: `show()` on dictation start, `update(level:)` /
-/// `update(caption:)` while running, `hide()` on stop, cancel, or failure.
+/// Lifecycle: `show()` on dictation start, `update(level:)` while running,
+/// `hide()` on stop, cancel, or failure.
 /// The panel floats above everything (including full-screen spaces), never
 /// takes key focus, and ignores all mouse events. It sits top-centre on the
 /// pointer's screen: tucked just below the camera housing ("notch") on
@@ -38,7 +36,6 @@ final class DictationHUD {
     /// to the main screen), top-centred per `DictationHUDLayout`.
     func show() {
         model.level = 0
-        model.caption = ""
         let screen = currentScreen()
         let inset = screen?.safeAreaInsets.top ?? 0
         model.notchMode = DictationHUDLayout.isNotched(topSafeInset: inset)
@@ -65,13 +62,6 @@ final class DictationHUD {
     func update(level rms: Float) {
         let scaled = min(1, max(0, rms * 8))
         model.level = max(scaled, model.level * 0.72)
-    }
-
-    /// Replaces the live caption with the latest partial transcript.
-    func update(caption: String) {
-        let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        model.caption = trimmed
     }
 
     /// Fades the HUD out, retreating a few points back up toward the notch /
@@ -103,7 +93,7 @@ final class DictationHUD {
     private func makePanelIfNeeded() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 64),
+            contentRect: NSRect(x: 0, y: 0, width: 180, height: 64),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.isOpaque = false
@@ -212,7 +202,6 @@ private struct DictationHUDContent: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Palette.accent)
             WaveformBars(level: model.level)
-            captionText
         }
         .padding(.horizontal, 20)
         // Notch mode pads down past the camera housing; fallback keeps the
@@ -237,24 +226,6 @@ private struct DictationHUDContent: View {
         }
     }
 
-    @ViewBuilder
-    private var captionText: some View {
-        if model.caption.isEmpty {
-            Text("Listening…")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
-        } else {
-            // Keep two lines so the live draft is useful while it grows;
-            // head-truncate only after both lines are full so the newest
-            // words remain visible without a tiny one-line sliver.
-            Text(model.caption)
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.92))
-                .lineLimit(2)
-                .truncationMode(.head)
-                .frame(maxWidth: model.notchMode ? 350 : 320, alignment: .leading)
-        }
-    }
 }
 
 private struct WaveformBars: View {

@@ -1143,9 +1143,9 @@ struct SettingsPage: View {
                 }
                 Divider()
                 toggleRow(
-                    title: "Live caption while dictating",
-                    detail: "Shows a floating waveform — and live text when " +
-                            "streaming recognition is on — while you dictate.",
+                    title: "Dictation indicator",
+                    detail: "Shows a floating microphone and waveform while " +
+                            "you dictate. It never displays transcript text.",
                     isOn: Binding(
                         get: { app.liveCaptions },
                         set: { app.setLiveCaptions($0) }))

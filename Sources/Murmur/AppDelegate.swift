@@ -901,9 +901,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         case .success(let started):
             recordingStartedAt = Date()
             let transcriber = self.transcriber
-            transcriber.onPartialTranscript = { [weak self] text in
-                DispatchQueue.main.async { self?.hud.update(caption: text) }
-            }
             streamingTask = Task {
                 // The vocabulary read touches several JSON files; fetch
                 // it inside the task (off main via the nonisolated async
@@ -1386,7 +1383,7 @@ enum Settings {
         set { defaults.set(newValue, forKey: "spokenSymbols") }
     }
 
-    /// Floating live-caption/waveform HUD shown while dictating.
+    /// Floating microphone/waveform HUD shown while dictating.
     static var liveCaptions: Bool {
         get { defaults.object(forKey: "liveCaptions") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "liveCaptions") }

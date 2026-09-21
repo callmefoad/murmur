@@ -93,7 +93,7 @@ final class DictationHUD {
     private func makePanelIfNeeded() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 180, height: 64),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 64),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.isOpaque = false
@@ -203,6 +203,7 @@ private struct DictationHUDContent: View {
                 .foregroundStyle(Palette.accent)
             WaveformBars(level: model.level)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 20)
         // Notch mode pads down past the camera housing; fallback keeps the
         // old capsule proportions.

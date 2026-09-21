@@ -1,9 +1,8 @@
 import Foundation
 
 /// A command is only created from the strict screen-action grammar. The
-/// caller supplies the authorization (the Murmur hotkey by default, or an
-/// optional spoken wake word); ordinary dictation outside that grammar cannot
-/// cause an app action by accident.
+/// The spoken Murmur keyword supplies the authorization; ordinary dictation
+/// outside that grammar cannot cause an app action by accident.
 struct VoiceCommand: Equatable, Identifiable {
     enum Action: Equatable {
         case openMessages(contact: String)
@@ -40,14 +39,6 @@ struct VoiceCommand: Equatable, Identifiable {
 /// intentionally not model-based: command boundaries stay deterministic,
 /// local, and testable, and malformed speech falls through as dictation.
 enum VoiceCommandParser {
-    enum Authorization: Equatable {
-        /// The transcript itself starts with a spoken wake word.
-        case spokenWakeWord
-        /// The Murmur hotkey already authorized this recording, so no spoken
-        /// name is needed. The command grammar remains strict either way.
-        case hotkey
-    }
-
     private static let wakeWords: Set<String> = [
         "murmur", "murmer", "murmor",
     ]
@@ -69,20 +60,9 @@ enum VoiceCommandParser {
 
     /// Parses commands such as:
     /// `open up my text messages with Isaiah and ask him who ...`
-    /// when the hotkey authorized the recording, or the same sentence prefixed
-    /// by “Murmur”/a common recognition variant.
-    static func parse(
-        _ text: String,
-        authorization: Authorization = .spokenWakeWord
-    ) -> VoiceCommand? {
-        let body: String
-        if let addressed = addressedBody(from: text) {
-            body = addressed
-        } else if authorization == .hotkey {
-            body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            return nil
-        }
+    /// only when it is prefixed by “Murmur”/a common recognition variant.
+    static func parse(_ text: String) -> VoiceCommand? {
+        guard let body = addressedBody(from: text) else { return nil }
 
         var command = body
         for prefix in ["i need you to ", "please "] {

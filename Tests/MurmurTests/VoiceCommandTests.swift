@@ -8,15 +8,9 @@ final class VoiceCommandTests: XCTestCase {
                 "open up my text messages with Isaiah and ask him who the painter was"))
     }
 
-    func testHotkeyAuthorizationDoesNotNeedSpokenWakeWord() {
-        let command = VoiceCommandParser.parse(
-            "open up my text messages with Isaiah and ask him who the painter was",
-            authorization: .hotkey)
-
-        XCTAssertEqual(
-            command,
-            VoiceCommand(action: .message(
-                contact: "Isaiah", draft: "Who was the painter?")))
+    func testOpenCommandWithoutWakeWordFallsThrough() {
+        XCTAssertNil(VoiceCommandParser.parse(
+            "open up my text messages with Shannon"))
     }
 
     func testParsesOpenConversationWithoutDraftRequest() {
@@ -63,7 +57,6 @@ final class VoiceCommandTests: XCTestCase {
 
     func testMalformedOrUnfinishedCommandFallsThrough() {
         XCTAssertNil(VoiceCommandParser.parse("Murmur, please"))
-        XCTAssertNil(VoiceCommandParser.parse("open messages with"),
-                     "Hotkey mode still requires a contact name.")
+        XCTAssertNil(VoiceCommandParser.parse("open messages with"))
     }
 }

@@ -1183,9 +1183,10 @@ struct SettingsPage: View {
                 Text("Voice commands").font(.headline)
                 Text("Murmur types what you say. These let it act on what " +
                      "you say instead — it can't tell whether you meant a " +
-                     "command or just said the words. The Murmur hotkey " +
-                     "authorizes a strict command, so you do not need to say " +
-                     "the name. Murmur never sends messages.")
+                     "command or just said the words. Screen actions must " +
+                     "begin with the spoken keyword “Murmur”; ordinary FN " +
+                     "dictation never triggers them. Murmur never sends " +
+                     "messages.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 toggleRow(
@@ -1424,7 +1425,7 @@ struct HelpPage: View {
                 Divider()
                 helpRow("text.insert", "Voice commands",
                     "Say “new line” or “new paragraph” to add line breaks. " +
-                    "For screen actions, hold the Murmur key and say the " +
+                    "For screen actions, say “Murmur” followed by the " +
                     "command; it opens the requested app and prepares a " +
                     "reviewable draft. Murmur never sends a message for you.")
                 Divider()

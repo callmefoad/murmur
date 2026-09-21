@@ -1027,12 +1027,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     }.value
                 telemetry.finish("rules")
 
-                // The held Murmur hotkey is the authorization gate. The
-                // grammar stays strict so ordinary dictation is untouched,
-                // while the spoken name remains an optional compatibility
-                // prefix for users who say it.
-                if let command = VoiceCommandParser.parse(
-                    formatted, authorization: .hotkey) {
+                // The spoken Murmur keyword is the authorization gate. The
+                // grammar stays strict so ordinary FN dictation is always
+                // audio-to-text and never triggers a screen action.
+                if let command = VoiceCommandParser.parse(formatted) {
                     uiState = .idle
                     telemetry.commit(wordCount: 0, usedModel: false, inserted: false)
                     executeVoiceCommand(command)

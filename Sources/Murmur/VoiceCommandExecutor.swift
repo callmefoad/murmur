@@ -31,7 +31,7 @@ enum VoiceCommandExecutor {
         }
     }
 
-    /// Executes a parsed command. The hotkey or spoken wake word is the
+    /// Executes a parsed command. The spoken Murmur keyword is the
     /// authorization; there is no additional confirmation prompt, and there
     /// is still no send operation.
     static func execute(_ command: VoiceCommand) async -> ExecutionResult {
@@ -90,9 +90,9 @@ enum VoiceCommandExecutor {
         return .copied
     }
 
-    /// Contact lookup is deferred until a hotkey-authorized command is ready
-    /// to execute. The first command may prompt for Contacts access; denying
-    /// it simply falls back to opening Messages and copying the draft.
+    /// Contact lookup is deferred until a spoken-keyword command is ready to
+    /// execute. The first command may prompt for Contacts access; denying it
+    /// simply falls back to opening Messages and copying the draft.
     private static func resolveContact(named name: String) async -> ContactDestination? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

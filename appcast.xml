@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Murmur Updates</title>
+    <link>https://raw.githubusercontent.com/callmefoad/murmur/main/appcast.xml</link>
+    <description>Updates for Murmur</description>
+    <language>en</language>
+  </channel>
+</rss>

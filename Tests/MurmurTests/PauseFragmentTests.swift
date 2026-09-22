@@ -76,6 +76,15 @@ final class PauseFragmentTests: XCTestCase {
             "I'm purposefully trying to speed up and slow down some of my speech.")
     }
 
+    func testIncompleteWayPhraseJoinsItsComplementClause() {
+        XCTAssertEqual(
+            formatted(
+                "Check and analyze the way. This conversation or this paragraph "
+                + "is being sent to you."),
+            "Check and analyze the way this conversation or this paragraph "
+                + "is being sent to you.")
+    }
+
     func testSettingOffLeavesTheBreaksAlone() {
         let input = "Now it's the primary blender. Motor."
         XCTAssertEqual(formatted(input, joinFragments: false), input)

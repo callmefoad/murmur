@@ -4,6 +4,7 @@ import Combine
 import Foundation
 import os
 import ServiceManagement
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -57,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
+    /// Retained for the app lifetime so Sparkle can schedule background checks
+    /// and present its standard update UI from the menu-bar app.
+    private var updaterController: SPUStandardUpdaterController?
     private let hud = DictationHUD.shared
     private let recorder = AudioRecorder()
     private let history = HistoryStore()
@@ -119,6 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         entries = history.entries
         statsStore.seed(from: history.entries)
         stats = statsStore.stats
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         setUpStatusItem()
         // Keep the menu-bar My Voice submenu in sync with preset edits made
         // in the dashboard. objectWillChange fires before the mutation lands,
@@ -1137,6 +1143,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
+        if let updaterController {
+            let updateItem = NSMenuItem(
+                title: "Check for Updates…",
+                action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                keyEquivalent: "")
+            updateItem.target = updaterController
+            menu.addItem(updateItem)
+        }
         menu.addItem(.separator())
 
         let hint = NSMenuItem(

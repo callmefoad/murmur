@@ -705,6 +705,13 @@ struct TextFormatter {
     /// erase deliberate noun-phrase sentences.
     private static let trailingNounPhraseOpeners: Set<String> = ["a", "an"]
 
+    /// Noun phrases that strongly predict a complement clause is still coming.
+    /// A period before the clause's subject is often only a prosodic pause:
+    /// "analyze the way. This conversation…".
+    private static let danglingComplementTails: [[String]] = [
+        ["the", "way"], ["the", "reason"], ["the", "idea"],
+    ]
+
     /// Stems whose "'s" is the verb "is", not a possessive.
     private static let contractiblePronouns: Set<String> = [
         "it", "that", "this", "there", "here", "he", "she", "what", "who",
@@ -864,6 +871,15 @@ struct TextFormatter {
         guard let opener = words.first else { return false }
         guard !Self.standaloneUtterances.contains(opener) else { return false }
         if Self.continuationOpeners.contains(opener) { return true }
+
+        let previousWords = Self.wordTokens(String(stem))
+        if terminator == ".",
+           Self.danglingComplementTails.contains(where: { tail in
+               previousWords.suffix(tail.count).elementsEqual(tail)
+           }),
+           ["this", "that", "what", "whether", "how", "why"].contains(opener) {
+            return true
+        }
 
         // A breath can split a continuation more than once. Once a prior
         // fragment ends in "and" or "and really", keep following a short

@@ -80,6 +80,29 @@ cd murmur
                           # running instance with the new build
 ```
 
+### Sending updates to testers
+
+Murmur uses Sparkle for in-app updates. The first Sparkle-enabled build must be
+installed once by hand; after that, Murmur checks for updates and can download
+and install signed releases automatically. Distribution is not ready until a
+Developer ID Application identity and Apple notarization credentials are
+configured on the release Mac. To publish a later release:
+
+```bash
+MURMUR_RELEASE_NOTES="Pause handling and transcription improvements." \
+MURMUR_PUBLISH=1 ./scripts/make_release.sh 0.1.1
+```
+
+The release script requires Developer ID signing and notarization, then signs
+its update archive with the Sparkle EdDSA key in your login Keychain, creates a
+GitHub Release, and pushes the signed appcast. macOS must be allowed to read
+the private Sparkle key from Keychain during release. Keep that private key in
+Keychain; only the public key is embedded in Murmur. Use the same Developer ID
+signer and Sparkle key for every release. For friend testing, send the first
+Sparkle-enabled, notarized app once;
+future releases appear in Murmur's `Check for Updates…` menu item or install
+automatically according to the user's update preference.
+
 For a faster clean build with no WhisperKit dependency, build the Apple-only
 edition with `MURMUR_LITE=1 swift build -c release`. The app hides Whisper
 automatically; Apple on-device recognition remains fully functional.
@@ -113,15 +136,16 @@ restart of a running instance after each build.
 
 Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
 Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. Murmur makes no network requests except the one-time
-model downloads by macOS itself (Apple speech assets) and, if you opt into
-the Whisper engine, the model fetch from Hugging Face. Dictation data is
-stored only in `~/Library/Application Support/Murmur/`.
+Profile analysis. Murmur checks its signed update feed and downloads updates
+when available. Other network requests are limited to one-time model downloads
+by macOS itself (Apple speech assets) and, if you opt into the Whisper engine,
+the model fetch from Hugging Face. Dictation data is stored only in
+`~/Library/Application Support/Murmur/`.
 
 ## Architecture
 
-Swift Package, one third-party dependency (WhisperKit, only if you use the
-Whisper engine):
+Swift Package, with Sparkle for updates and WhisperKit only when the Whisper
+engine is included:
 
 ```
 HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine

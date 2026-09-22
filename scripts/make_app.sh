@@ -19,10 +19,19 @@ swift build -c release
 
 APP="build/Murmur.app"
 ENTITLEMENTS="Resources/Murmur.entitlements"
+SPARKLE_FRAMEWORK=$(find .build/artifacts/sparkle -type d \
+    -path '*/Sparkle.xcframework/macos-*/Sparkle.framework' \
+    -print -quit 2>/dev/null || true)
+if [ -z "$SPARKLE_FRAMEWORK" ]; then
+    echo "ERROR: Sparkle.framework was not produced by SwiftPM." >&2
+    echo "Run 'swift package resolve' and rebuild before packaging." >&2
+    exit 1
+fi
 rm -rf "$APP" build/Murmur.zip
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
 cp .build/release/Murmur "$APP/Contents/MacOS/Murmur"
+ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 
 # App icon (generated once; rerun scripts/make_icon.swift to change it).
 if [ -f "Resources/Murmur.icns" ]; then
@@ -53,6 +62,21 @@ fi
 
 echo "Version: $VERSION (build $BUILD_NUMBER)"
 
+SPARKLE_FEED_URL="${MURMUR_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/callmefoad/murmur/main/appcast.xml}"
+SPARKLE_PUBLIC_KEY="${MURMUR_SPARKLE_PUBLIC_ED_KEY:-/DXxHoZOdWFpMFBJWyQeQljfVSDWAde7GcxGMR7utNQ=}"
+SPARKLE_SECURITY_PLIST=""
+if [ -n "$SPARKLE_PUBLIC_KEY" ]; then
+    SPARKLE_SECURITY_PLIST=$(cat <<KEYS
+    <key>SUPublicEDKey</key>
+    <string>$SPARKLE_PUBLIC_KEY</string>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+KEYS
+    )
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -77,6 +101,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>26.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>SUFeedURL</key>
+    <string>$SPARKLE_FEED_URL</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
+    <true/>
+$SPARKLE_SECURITY_PLIST
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur records your voice while you hold the dictation key so it can transcribe it on-device.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
@@ -103,6 +134,15 @@ elif security find-identity -v -p codesigning 2>/dev/null | grep -q '"WhisperFlo
     IDENTITY="WhisperFlow Dev"
 elif DEV_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep '"Developer ID Application:' | head -1 | awk '{print $2}') && [ -n "$DEV_ID" ]; then
     IDENTITY="$DEV_ID"
+fi
+
+# Sparkle ships its own nested helper executables. Sign the framework before
+# signing the host app so Developer ID and ad-hoc builds both pass validation.
+if [ -n "$IDENTITY" ]; then
+    codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
+else
+    codesign --force --sign - "$APP/Contents/Frameworks/Sparkle.framework"
 fi
 
 NOTARIZABLE=false
@@ -137,6 +177,7 @@ case "$FLAGS_LINE" in
 esac
 
 # --- Notarization (opt-in via environment) ------------------------------------
+NOTARIZED=false
 if $NOTARIZABLE; then
     if [ -n "${NOTARY_PROFILE:-}" ]; then
         SUBMIT_ARGS=(--keychain-profile "$NOTARY_PROFILE")
@@ -152,6 +193,7 @@ if $NOTARIZABLE; then
             && xcrun notarytool submit build/Murmur.zip "${SUBMIT_ARGS[@]}" --wait; then
             if xcrun stapler staple "$APP"; then
                 echo "Notarized and stapled."
+                NOTARIZED=true
             else
                 echo "WARNING: stapling failed — app is Developer-ID-signed but un-notarized." >&2
             fi
@@ -162,6 +204,16 @@ if $NOTARIZABLE; then
         echo "Developer ID signature present but no notarization credentials set (NOTARY_PROFILE or APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID); skipping notarization."
     fi
 fi
+
+if [ "${MURMUR_REQUIRE_NOTARIZATION:-0}" = "1" ] && ! $NOTARIZED; then
+    echo "ERROR: This release requires a successfully notarized and stapled app." >&2
+    exit 1
+fi
+
+# Always leave the final, post-signing bundle as an archive. This is the
+# artifact uploaded to a release and consumed by Sparkle's appcast.
+ditto -c -k --keepParent "$APP" build/Murmur.zip
+echo "Update archive: build/Murmur.zip"
 
 # --- Seamless swap -------------------------------------------------------------
 # Replace any running Murmur with the freshly built bundle so updates are

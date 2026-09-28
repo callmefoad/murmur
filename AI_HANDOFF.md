@@ -8,8 +8,8 @@ transcripts, or other secrets in this file; the GitHub repository is public.
 ## Current state
 
 - Repository: `callmefoad/murmur`; default branch: `main`.
-- Last verified sync: 2026-09-28, commit `d025464` (`origin/main`); working tree
-  was clean at handoff-file creation.
+- Last verified sync: 2026-09-28. Full build and XCTest suite run: 360 tests,
+  0 failures (see the Claude pause-join entry).
 - Repository visibility is public; `main` has no branch protection or rulesets.
 - Latest change clarified that dictation stays on-device while app updates and
   optional model downloads use the network (`README.md`, `MainView.swift`, and
@@ -66,6 +66,29 @@ a dated handoff entry with exact files changed, verification/results,
 commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
+
+### 2026-09-28 — Claude pause-join and capitalization fixes
+
+- Files: `Sources/Murmur/TextFormatter.swift`,
+  `Tests/MurmurTests/PauseFragmentTests.swift`.
+- First full suite run after the Sep 11–22 work: 353/354 passed. The failure
+  (`testChainedPauseFragmentsStayInOneThought`) predates Sparkle: "us" was on
+  the abbreviation list, so "save us. An unmeasurable…" never joined. Everyday
+  words on that list (us, no, am, …) now count only when capitalized.
+- Stopped wrong joins: "Sounds good. Talk soon." and "Great job today.
+  Seriously." were merged. Two-word fragments now join only after a
+  determiner ("The manager."), lone "-ly" words stay, more common verbs and
+  interjections are recognized.
+- Added safe joins: whenever/wherever/whereas clauses, trailing time phrases
+  ("Two weeks ago.", "Later today.", "Sometime next week."), and any period
+  after the/my/your/our/their/its.
+- Fixed "3 p.m. tomorrow" becoming "3 p.M. Tomorrow".
+- Verification: `swift build --build-tests` then
+  `xcrun xctest .build/debug/MurmurTests.xctest` — 360 tests, 0 failures.
+  `Murmur --selftest` 10/10 PASS. Note the bundle is `MurmurTests.xctest`,
+  not `MurmurPackageTests.xctest`.
+- Next: when adding a pause rule, add a must-survive case next to it. Missed
+  joins are harmless, wrong joins change what the user said.
 
 ### 2026-09-28 — Codex privacy-copy correction (`d025464`)
 

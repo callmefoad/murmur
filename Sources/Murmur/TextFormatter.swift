@@ -620,7 +620,7 @@ struct TextFormatter {
     private static let continuationOpeners: Set<String> = [
         "and", "but", "or", "nor", "so", "yet", "plus", "because", "if",
         "when", "while", "although", "though", "unless", "until", "before",
-        "after", "since", "as",
+        "after", "since", "as", "whenever", "wherever", "whereas",
     ]
 
     /// Utterances that stand alone as a whole sentence, so a short verbless
@@ -632,6 +632,10 @@ struct TextFormatter {
         "nice", "great", "cool", "wow", "absolutely", "definitely", "done",
         "congrats", "congratulations", "good", "bad", "same", "either",
         "neither", "both", "anyway", "regardless", "understood", "noted",
+        "cheers", "whatever", "anyways", "perfect", "awesome", "amazing",
+        "excellent", "fine", "gotcha", "totally", "welcome", "lol",
+        "haha", "oh", "ah", "wait", "hmm", "fair", "deal",
+        "wonderful", "beautiful", "sweet", "anytime",
     ]
 
     /// Words that routinely carry a sentence-ending period of their own, so
@@ -643,6 +647,14 @@ struct TextFormatter {
         "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
         "oct", "nov", "dec", "mon", "tue", "tues", "wed", "thu", "thur",
         "thurs", "fri", "sat", "sun",
+    ]
+
+    /// Abbreviations that are also everyday words. "save us." and "the
+    /// answer is no." end real sentences, so these only count as an
+    /// abbreviation when written with a capital: "US.", "No.", "Sun.".
+    private static let wordLikeAbbreviations: Set<String> = [
+        "no", "us", "am", "co", "est", "min", "max", "sat", "sun", "mar",
+        "al", "fig", "vol",
     ]
 
     /// Finite verbs common enough in speech to settle the question cheaply.
@@ -672,7 +684,13 @@ struct TextFormatter {
         "bring", "brings", "brought", "meet", "meets", "met", "wait",
         "waits", "sign", "signs", "cover", "covers", "handle", "handles",
         "run", "manage", "manages", "owe", "owes", "cost", "costs",
-        "review", "reviews", "reviewed",
+        "review", "reviews", "reviewed", "talk", "talks", "speak",
+        "speaks", "sound", "sounds", "miss", "check", "checks", "text",
+        "email", "hang", "stay", "stays", "enjoy", "eat", "sleep", "drive",
+        "catch", "grab", "fix", "fixes", "open", "close", "stop", "show",
+        "shows", "turn", "play", "plays", "watch", "listen", "believe",
+        "understand", "remember", "forget", "guess", "wish", "happen",
+        "happens", "matter", "matters", "care", "agree", "worry",
     ]
 
     /// Openers that leave a phrase stranded on the wrong side of a period.
@@ -703,7 +721,17 @@ struct TextFormatter {
     /// time phrase when it follows a complete clause. This is intentionally
     /// narrower than all determiners: joining every "The …" fragment would
     /// erase deliberate noun-phrase sentences.
-    private static let trailingNounPhraseOpeners: Set<String> = ["a", "an"]
+    private static let trailingNounPhraseOpeners: Set<String> = [
+        "a", "an", "next", "last", "this", "sometime", "early", "later",
+        "earlier", "tomorrow", "yesterday", "two",
+        "three", "four", "five", "few", "couple",
+    ]
+
+    /// Words a sentence cannot end on. A period after one is always a
+    /// breath: "It's the. Primary motor."
+    private static let determinerTails: Set<String> = [
+        "the", "my", "your", "our", "their", "its",
+    ]
 
     /// Noun phrases that strongly predict a complement clause is still coming.
     /// A period before the clause's subject is often only a prosodic pause:
@@ -781,7 +809,11 @@ struct TextFormatter {
     /// the phrase itself contains no finite verb.
     private static func isTrailingTimePhrase(_ words: [String]) -> Bool {
         guard let last = words.last else { return false }
-        return ["later", "today", "tomorrow", "yesterday", "tonight"].contains(last)
+        return [
+            "later", "today", "tomorrow", "yesterday", "tonight", "ago",
+            "week", "weekend", "month", "year", "morning", "afternoon",
+            "evening", "night",
+        ].contains(last)
     }
 
     /// A prepositional opener can contain a coordinated clause of its own:
@@ -859,7 +891,11 @@ struct TextFormatter {
         guard let lastWord = Self.wordTokens(String(stem)).last else { return false }
         guard lastWord.count > 1 else { return false }
         if terminator == ".", Self.abbreviations.contains(lastWord) {
-            return false
+            let written = stem.split(whereSeparator: { $0 == " " || $0 == "\t" }).last ?? ""
+            if !Self.wordLikeAbbreviations.contains(lastWord)
+                || written.contains(where: { $0.isUppercase }) {
+                return false
+            }
         }
         // A recognizer that inserts a period capitalizes the word after it,
         // so a lowercase opener means this break did not come from the
@@ -873,6 +909,9 @@ struct TextFormatter {
         if Self.continuationOpeners.contains(opener) { return true }
 
         let previousWords = Self.wordTokens(String(stem))
+        if terminator == ".", Self.determinerTails.contains(lastWord) {
+            return true
+        }
         if terminator == ".",
            Self.danglingComplementTails.contains(where: { tail in
                previousWords.suffix(tail.count).elementsEqual(tail)
@@ -914,7 +953,7 @@ struct TextFormatter {
         }
         if Self.isTrailingTimePhrase(words),
            Self.trailingNounPhraseOpeners.contains(opener) {
-            return terminator == "."
+            return terminator == "." && words.count <= 6
         }
         // A bare noun with nothing hanging off it: "Manager.",
         // "The manager." Anything longer reads as a deliberate
@@ -923,7 +962,13 @@ struct TextFormatter {
         // exclamation: "Who runs it? Manager." is a real two-part exchange,
         // while a question's continuation is handled by a clause/preposition
         // opener above.
-        return terminator == "." && words.count <= 2
+        // Two words only when the first is a determiner ("The manager."):
+        // "Talk soon." and "Happy birthday." are whole sentences.
+        // A lone "-ly" word is an interjection: "Seriously."
+        guard terminator == "." else { return false }
+        if words.count == 1 { return !opener.hasSuffix("ly") }
+        return words.count == 2 && ["the", "a", "an", "my", "our", "your", "their"]
+            .contains(opener)
     }
 
     /// Joins `next` onto `previous`, dropping the period between them and
@@ -991,7 +1036,11 @@ struct TextFormatter {
                 }
                 capitalizeNext = false
             } else if ".!?\n".contains(character) {
-                capitalizeNext = true
+                // A period inside a dotted abbreviation — "p.m.", "e.g.",
+                // "U.S." — is not a sentence end, and neither is the one
+                // closing it, so "3 p.m. tomorrow" keeps its lowercase.
+                capitalizeNext = character != "." || !Self.isDottedAbbreviation(
+                    in: characters, periodAt: index)
             } else if !character.isWhitespace,
                       !Self.capitalizationTransparent.contains(character) {
                 capitalizeNext = false
@@ -1020,6 +1069,26 @@ struct TextFormatter {
             index += 1
         }
         return false
+    }
+
+    /// Whether the period at `periodAt` belongs to a single-letter dotted
+    /// run such as "p.m." or "e.g.": a letter before it with a period or
+    /// word edge before that, and a letter or another such pair around it.
+    private static func isDottedAbbreviation(
+        in characters: [Character], periodAt index: Int
+    ) -> Bool {
+        func isLoneLetter(at i: Int) -> Bool {
+            guard i >= 0, i < characters.count, characters[i].isLetter else { return false }
+            let before = i - 1 < 0 ? " " : characters[i - 1]
+            return before == "." || before.isWhitespace
+        }
+        guard isLoneLetter(at: index - 1) else { return false }
+        // Inside the run: "p." followed directly by "m".
+        if index + 1 < characters.count, characters[index + 1].isLetter {
+            return true
+        }
+        // Closing the run: "m." preceded by "p.".
+        return index - 2 >= 0 && characters[index - 2] == "."
     }
 
     private func ensureTerminalPunctuation(in text: String) -> String {

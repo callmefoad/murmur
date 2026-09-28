@@ -122,7 +122,55 @@ final class PauseFragmentTests: XCTestCase {
             "I finally replaced it with an iPhone.")
     }
 
+    func testContinuationAfterUsIsNotAnAbbreviation() {
+        XCTAssertEqual(
+            formatted("It will save us. A lot of time later."),
+            "It will save us a lot of time later.")
+    }
+
+    func testWheneverClauseJoins() {
+        XCTAssertEqual(
+            formatted("Give me a call. Whenever you're free."),
+            "Give me a call whenever you're free.")
+    }
+
+    func testTrailingTimePhrasesJoin() {
+        XCTAssertEqual(formatted("We shipped it. Two weeks ago."), "We shipped it two weeks ago.")
+        XCTAssertEqual(formatted("I'll send it over. Later today."), "I'll send it over later today.")
+        XCTAssertEqual(
+            formatted("We should get together. Sometime next week."),
+            "We should get together sometime next week.")
+    }
+
+    func testSentenceNeverEndsOnADeterminer() {
+        XCTAssertEqual(formatted("It's the. Primary motor."), "It's the primary motor.")
+    }
+
     // MARK: - Must not join
+
+    /// Short sign-offs and interjections are whole sentences, not stranded
+    /// fragments, so the bare-word join must leave them alone.
+    func testShortRepliesAndSignOffsSurvive() {
+        for input in [
+            "Sounds good. Talk soon.",
+            "Great job today. Seriously.",
+            "Happy birthday. Hope it's a good one.",
+            "Thanks again. Really.",
+            "It's done. Finally.",
+            "Pick one. Red or blue.",
+            "See the attached file. Page two.",
+            "That was two weeks ago. Now it's fixed.",
+            "The answer is no. We aren't doing that.",
+            "He lives in the US. He moved last year.",
+        ] {
+            XCTAssertEqual(formatted(input), input)
+        }
+    }
+
+    func testDottedAbbreviationDoesNotCapitalizeNextWord() {
+        let input = "The meeting is at 3 p.m. tomorrow."
+        XCTAssertEqual(formatted(input), input)
+    }
 
     /// A verbless noun phrase long enough to read as a deliberate sentence.
     func testDeliberateNounPhraseSentenceSurvives() {

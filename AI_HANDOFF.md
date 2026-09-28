@@ -8,8 +8,8 @@ transcripts, or other secrets in this file; the GitHub repository is public.
 ## Current state
 
 - Repository: `callmefoad/murmur`; default branch: `main`.
-- Last verified sync: 2026-09-28. Full build and XCTest suite run: 360 tests,
-  0 failures (see the Claude pause-join entry).
+- Last verified sync: 2026-09-28. Full build and XCTest suite run: 371 tests,
+  0 failures.
 - Repository visibility is public; `main` has no branch protection or rulesets.
 - Latest change clarified that dictation stays on-device while app updates and
   optional model downloads use the network (`README.md`, `MainView.swift`, and
@@ -66,6 +66,33 @@ a dated handoff entry with exact files changed, verification/results,
 commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
+
+### 2026-09-28 — Claude grammar punctuation pass
+
+- Files: `Sources/Murmur/RewriteEngine.swift`, `AppDelegate.swift`,
+  `MainView.swift`, `CleanupLevel.swift`, `TextFormatter.swift`,
+  `Tests/MurmurTests/GrammarPunctuationTests.swift` (new),
+  `PauseFragmentTests.swift`.
+- Why: the owner talks in run-on thoughts and pauses to think. Apple's
+  recognizer puts a period at every pause. He wants punctuation by grammar,
+  not by pauses. Rules can't place commas, so Cleaned now gets one model pass
+  that may only move punctuation and capitals.
+- How: strip pause periods/commas (keep "?", numbers, "p.m."), few-shot
+  prompt, greedy sampling. `acceptedPunctuation` rejects any word added,
+  dropped, reordered or changed, lost line breaks, em dashes, semicolons,
+  altered numbers or deliberate casing, or output with no sentence marks.
+  `mergedPunctuation` then undoes two model habits: "?" on statements, and
+  lowercased mid-sentence names.
+- Setting: "Punctuate by grammar", `grammarPunctuation`, default ON. Skips
+  dictations under 12 words.
+- Measured live on this Mac: about 0.9–1.2 s for a normal message, 2.4 s for
+  a ~60-word ramble. The "caveman mode" injection case came back punctuated
+  only.
+- Also: joining "p.m. On Tuesday" no longer drops the final period.
+- Verification: 371 tests, 0 failures. `Murmur --selftest` 10/10.
+- Next: owner tries it for a day. If the delay bugs him, the toggle is in
+  Settings. Do not loosen `acceptedPunctuation`; it is what keeps the
+  no-commands rule true.
 
 ### 2026-09-28 — Claude pause-join and capitalization fixes
 

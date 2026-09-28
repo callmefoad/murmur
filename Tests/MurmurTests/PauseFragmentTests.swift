@@ -167,6 +167,12 @@ final class PauseFragmentTests: XCTestCase {
         }
     }
 
+    func testJoinKeepsThePeriodOfADottedAbbreviation() {
+        XCTAssertEqual(
+            formatted("It ships at 3:30 p.m. On Tuesday."),
+            "It ships at 3:30 p.m. on Tuesday.")
+    }
+
     func testDottedAbbreviationDoesNotCapitalizeNextWord() {
         let input = "The meeting is at 3 p.m. tomorrow."
         XCTAssertEqual(formatted(input), input)

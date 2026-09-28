@@ -1176,6 +1176,16 @@ struct SettingsPage: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Divider()
+                toggleRow(
+                    title: "Punctuate by grammar",
+                    detail: "Puts commas and periods where the sentence needs " +
+                            "them instead of wherever you paused. Uses the " +
+                            "on-device model and adds about half a second. " +
+                            "Your words never change, only the punctuation.",
+                    isOn: Binding(
+                        get: { app.grammarPunctuation },
+                        set: { app.setGrammarPunctuation($0) }))
             }
             .card()
 

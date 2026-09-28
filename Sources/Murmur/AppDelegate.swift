@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @Published var spokenLayout: Bool = Settings.spokenLayout
     /// Opt-in: whether spoken symbol tokens ("comma", "star") convert.
     @Published var spokenSymbols: Bool = Settings.spokenSymbols
+    @Published var grammarPunctuation: Bool = Settings.grammarPunctuation
     @Published var liveCaptions: Bool = Settings.liveCaptions
     @Published var consumeHotkey: Bool = Settings.consumeHotkey
     @Published var historyPaused: Bool = Settings.historyPaused
@@ -392,6 +393,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         spokenLayout = on
     }
 
+    func setGrammarPunctuation(_ on: Bool) {
+        Settings.grammarPunctuation = on
+        grammarPunctuation = on
+    }
+
     func setSpokenSymbols(_ on: Bool) {
         Settings.spokenSymbols = on
         spokenSymbols = on
@@ -702,6 +708,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 // gesture. Automatic cleanup still degrades silently.
                 failureLabel: forcePolished ? "Polished cleanup" : nil,
                 run: { try await engine.rewrite($0, instructions: instructions) })
+        }
+
+        // Cleaned re-punctuates by grammar instead of by pauses. The guard
+        // on `.punctuationOnly` rejects any change to the words themselves,
+        // so this is the one model pass that cannot act on what was said.
+        if level == .cleaned, Settings.grammarPunctuation,
+           RewriteEngine.needsPunctuationPass(text) {
+            return RewritePass(
+                announcement: nil,
+                confirmation: nil,
+                profile: .punctuationOnly,
+                context: "grammar-punctuation",
+                failureLabel: nil,
+                run: { try await engine.repunctuate($0) })
         }
         return nil
     }
@@ -1342,6 +1362,14 @@ enum Settings {
         set { defaults.set(newValue, forKey: "joinFragments") }
     }
 
+    /// Re-punctuate Cleaned dictations by grammar with the on-device model,
+    /// instead of keeping a period at every pause. ON by default. Only
+    /// punctuation and capitals can change; see `acceptedPunctuation`.
+    static var grammarPunctuation: Bool {
+        get { defaults.object(forKey: "grammarPunctuation") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "grammarPunctuation") }
+    }
+
     /// How aggressively dictations are cleaned up: 0 Verbatim,
     /// 1 Cleaned (default), 2 Polished, 3 Tightened.
     ///
@@ -1357,7 +1385,8 @@ enum Settings {
     ///   3. `introducedBannedPhrasing` discards output that reaches for
     ///      vocabulary or punctuation the speaker did not use;
     ///   4. every rejection degrades to the rules-only text, silently.
-    /// Normal hold-to-talk therefore stays model-free unless changed here.
+    /// Normal hold-to-talk never rewords unless changed here. Its only model
+    /// pass is `grammarPunctuation`, which must return identical words.
     static var cleanupLevel: Int {
         get {
             let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 1

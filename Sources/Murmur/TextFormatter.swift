@@ -980,7 +980,10 @@ struct TextFormatter {
             opener.replaceSubrange(
                 opener.startIndex...opener.startIndex, with: first.lowercased())
         }
-        return String(previous.dropLast()) + " " + opener
+        // The period closing "p.m." or "e.g." belongs to the word.
+        let keepsPeriod = previous.range(
+            of: "(^|\\s)([A-Za-z]\\.){2,}$", options: .regularExpression) != nil
+        return (keepsPeriod ? previous : String(previous.dropLast())) + " " + opener
     }
 
     /// "I" and its contractions keep their capital wherever they land.

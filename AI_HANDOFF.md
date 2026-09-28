@@ -67,6 +67,20 @@ commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
 
+### 2026-09-28 — Claude app launch fix
+
+- File: `scripts/make_app.sh`.
+- Every local build since the Sparkle commit (`f82662d`) crashed at launch:
+  "Library not loaded: @rpath/Sparkle.framework". Two causes. SwiftPM only
+  sets `@loader_path`, so the script now adds `@executable_path/../Frameworks`.
+  The local signing identity has no Team ID, so hardened-runtime library
+  validation rejected Sparkle. Local identities now sign with
+  `disable-library-validation`. Developer ID builds do not.
+- Verification: `./scripts/make_app.sh` built, signed with "WhisperFlow Dev",
+  `codesign --verify --deep --strict` OK, and the app stayed running.
+- Next: before any tester release, confirm a Developer ID build launches.
+  That path still has not been run on this Mac.
+
 ### 2026-09-28 — Claude grammar punctuation pass
 
 - Files: `Sources/Murmur/RewriteEngine.swift`, `AppDelegate.swift`,

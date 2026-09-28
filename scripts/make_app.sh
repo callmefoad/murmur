@@ -32,6 +32,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 
 cp .build/release/Murmur "$APP/Contents/MacOS/Murmur"
 ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+# SwiftPM only sets @loader_path, which points at Contents/MacOS. Without
+# this the app dies at launch with "Library not loaded: Sparkle.framework".
+install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP/Contents/MacOS/Murmur"
 
 # App icon (generated once; rerun scripts/make_icon.swift to change it).
 if [ -f "Resources/Murmur.icns" ]; then
@@ -135,6 +139,22 @@ elif security find-identity -v -p codesigning 2>/dev/null | grep -q '"WhisperFlo
 elif DEV_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep '"Developer ID Application:' | head -1 | awk '{print $2}') && [ -n "$DEV_ID" ]; then
     IDENTITY="$DEV_ID"
 fi
+
+# A local self-signed identity has no Team ID, and hardened runtime's library
+# validation refuses any framework without a matching one, so the app dies at
+# launch loading Sparkle. Local builds relax that one check; Developer ID
+# builds keep it.
+case "$IDENTITY" in
+    ""|"Developer ID Application":*) ;;
+    *)
+        LOCAL_ENTITLEMENTS="build/Murmur.local.entitlements"
+        cp "$ENTITLEMENTS" "$LOCAL_ENTITLEMENTS"
+        /usr/libexec/PlistBuddy -c \
+            "Add :com.apple.security.cs.disable-library-validation bool true" \
+            "$LOCAL_ENTITLEMENTS"
+        ENTITLEMENTS="$LOCAL_ENTITLEMENTS"
+        ;;
+esac
 
 # Sparkle ships its own nested helper executables. Sign the framework before
 # signing the host app so Developer ID and ad-hoc builds both pass validation.

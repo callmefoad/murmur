@@ -304,7 +304,7 @@ final class RewriteEngine {
             instructions: Self.hardenedInstructions(Self.punctuationPrompt))
         let response = try await session.respond(
             to: Self.framedPrompt(transcript: Self.strippingPausePunctuation(text)),
-            options: GenerationOptions(sampling: .greedy))
+            options: GenerationOptions(samplingMode: .greedy))
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

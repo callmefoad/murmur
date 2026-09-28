@@ -240,7 +240,7 @@ struct SidebarView: View {
             } else {
                 Text("∞ words remaining")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Everything runs on-device. Unlimited, free, private.")
+                Text("Speech and text stay on-device. Updates and optional model downloads use the network.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button { page = .help } label: {
@@ -1425,8 +1425,10 @@ struct HelpPage: View {
                     "while dictating.")
                 Divider()
                 helpRow("lock.shield", "Private by design",
-                    "Recognition runs entirely on this Mac using Apple's on-device " +
-                    "speech model. No audio or text ever leaves your machine.")
+                    "Audio and transcripts stay on this Mac. Murmur connects to " +
+                    "Apple for speech assets, Hugging Face for optional Whisper " +
+                    "models, and GitHub for signed app updates; those requests " +
+                    "download models or updates, not dictation.")
             }
             .padding(20)
             .background(Palette.card, in: RoundedRectangle(cornerRadius: 16))

@@ -113,7 +113,7 @@ $SPARKLE_SECURITY_PLIST
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Murmur transcribes your speech using macOS's on-device speech recognition. Audio never leaves this Mac.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Local build — no data leaves this Mac.</string>
+    <string>Murmur — local-first, on-device dictation.</string>
 </dict>
 </plist>
 PLIST

@@ -1,10 +1,12 @@
 # Murmur 🎙️
 
-**Private, unlimited voice dictation for macOS — 100% on-device.**
+**Private, unlimited voice dictation for macOS — speech processed on-device.**
 
 Hold `fn`, speak, release — clean text appears at your cursor in any app.
-No cloud, no subscription, no word limits. Your audio and transcripts never
-leave your Mac.
+No cloud transcription, no subscription, no word limits. Your audio and
+transcripts stay on your Mac. Murmur does use the network for signed app
+updates and optional recognition-model downloads; those requests do not include
+your dictation.
 
 ![Murmur dashboard](Resources/screenshot.png)
 
@@ -136,11 +138,11 @@ restart of a running instance after each build.
 
 Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
 Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. Murmur checks its signed update feed and downloads updates
-when available. Other network requests are limited to one-time model downloads
-by macOS itself (Apple speech assets) and, if you opt into the Whisper engine,
-the model fetch from Hugging Face. Dictation data is stored only in
-`~/Library/Application Support/Murmur/`.
+Profile analysis. Audio and transcript content are not sent to Murmur's
+servers. Murmur connects to GitHub for signed app updates, macOS/Apple for
+on-device speech assets, and Hugging Face if you enable Whisper and its model
+isn't installed yet; those requests download updates or models, not dictation.
+Dictation data is stored only in `~/Library/Application Support/Murmur/`.
 
 ## Architecture
 

@@ -97,9 +97,10 @@ commit/push status, and the next step so the other agent can resume.”
 - Created this shared handoff and the small Codex/Claude repository instructions.
 - `AGENTS.md` and `CLAUDE.md` point both agents to this same file and require
   append-only handoff notes after work.
-- This handoff setup has not yet been committed or pushed.
-- Next: review this file, then commit and push the handoff setup so both agents
-  can read and append to it.
+- Shared handoff files were introduced in `161d034`; this log update records
+  that commit before the first push to `origin/main`.
+- Next: have either agent resume from this file, append verified work, and hand
+  back the latest commit SHA.
 
 ### 2026-09-28 — Claude review (reported by user)
 

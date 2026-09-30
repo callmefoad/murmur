@@ -33,6 +33,9 @@ struct MurmurMain {
             case "--needs-polish":
                 guard let text = arguments.next() else { usageAndExit() }
                 mode = .needsPolish(text)
+            case "--punctuate":
+                guard let text = arguments.next() else { usageAndExit() }
+                mode = .punctuate(text)
             case "--selftest":
                 mode = .selftest
             case "--locale":
@@ -54,6 +57,19 @@ struct MurmurMain {
             // Debug aid for tuning the post-release latency gate: prints
             // whether this text would pay for a model polish pass.
             print(RewriteEngine.needsPolish(text) ? "MODEL" : "SKIP")
+            exit(0)
+
+        case .punctuate(let text):
+            // Debug aid: the grammar punctuation pass on its own, with timing.
+            guard Punctuator.shared.warmUp() else {
+                FileHandle.standardError.write(Data("Punctuation model not installed\n".utf8))
+                exit(1)
+            }
+            let started = Date()
+            let result = Punctuator.shared.punctuate(TextFormatter().format(text))
+            print(result)
+            FileHandle.standardError.write(Data(String(
+                format: "%.0f ms\n", Date().timeIntervalSince(started) * 1000).utf8))
             exit(0)
 
         case .format(let text):
@@ -145,6 +161,7 @@ struct MurmurMain {
         case transform(String)
         case polish(String)
         case needsPolish(String)
+        case punctuate(String)
         case selftest
     }
 
@@ -160,6 +177,7 @@ struct MurmurMain {
           Murmur --format "<text>"    run the text formatter on a string
           Murmur --polish "<text>"    run the tap-then-hold model cleanup
           Murmur --needs-polish "<t>" would this text pay for a model pass?
+          Murmur --punctuate "<t>"   format, then punctuate by grammar
           Murmur --selftest           run formatter self-tests
         """)
         exit(0)

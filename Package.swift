@@ -9,6 +9,11 @@ let packageDependencies: [Package.Dependency] = [
     .package(
         url: "https://github.com/sparkle-project/Sparkle.git",
         exact: "2.9.6"),
+    // Runs the punctuation model (see Punctuator.swift). Static library, so
+    // nothing extra to embed or sign in the app bundle.
+    .package(
+        url: "https://github.com/microsoft/onnxruntime-swift-package-manager",
+        exact: "1.24.2"),
 ] + (liteBuild ? [] : [
     .package(
         url: "https://github.com/argmaxinc/WhisperKit.git",
@@ -16,6 +21,7 @@ let packageDependencies: [Package.Dependency] = [
 ])
 let murmurDependencies: [Target.Dependency] = [
     .product(name: "Sparkle", package: "Sparkle"),
+    "PunctuationRuntime",
 ] + (liteBuild ? [] : [
     .product(name: "WhisperKit", package: "WhisperKit"),
 ])
@@ -25,6 +31,15 @@ let package = Package(
     platforms: [.macOS(.v26)],
     dependencies: packageDependencies,
     targets: [
+        // C wrapper over ONNX Runtime for the punctuation model. The
+        // Objective-C bindings can't read the model's bool outputs.
+        .target(
+            name: "PunctuationRuntime",
+            dependencies: [
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+            ],
+            path: "Sources/PunctuationRuntime"
+        ),
         .executableTarget(
             name: "Murmur",
             dependencies: murmurDependencies,

@@ -8,7 +8,7 @@ transcripts, or other secrets in this file; the GitHub repository is public.
 ## Current state
 
 - Repository: `callmefoad/murmur`; default branch: `main`.
-- Last verified sync: 2026-09-28. Full build and XCTest suite run: 371 tests,
+- Last verified sync: 2026-09-29. Full build and XCTest suite run: 375 tests,
   0 failures.
 - Repository visibility is public; `main` has no branch protection or rulesets.
 - Latest change clarified that dictation stays on-device while app updates and
@@ -66,6 +66,40 @@ a dated handoff entry with exact files changed, verification/results,
 commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
+
+### 2026-09-29 — Claude punctuation model replaces the LLM pass, HUD stays put
+
+- Files: `Package.swift`, `Package.resolved`,
+  `Sources/PunctuationRuntime/` (new C target), `Sources/Murmur/Punctuator.swift`
+  (new), `Sources/Murmur/AppDelegate.swift`, `Sources/Murmur/RewriteEngine.swift`
+  (restored to its pre-`c3809d4` state), `Sources/Murmur/CleanupLevel.swift`,
+  `Sources/Murmur/MainView.swift`, `Sources/Murmur/Main.swift`,
+  `Sources/Murmur/DictationHUD.swift`, `README.md`,
+  `Tests/MurmurTests/PunctuatorTests.swift` (new),
+  `Tests/MurmurTests/GrammarPunctuationTests.swift` (deleted).
+- The FoundationModels punctuation pass was slow (1 to 2.5 s) and uneven. It is
+  gone. "Punctuate by grammar" now runs
+  `1-800-BAD-CODE/punctuation_fullstop_truecase_english` (Apache 2.0), a token
+  classifier via ONNX Runtime (`onnxruntime-swift-package-manager` 1.24.2,
+  static). It labels words, it cannot generate text, and the rebuild only
+  changes trailing punctuation and first-letter case, then checks the word
+  sequence is identical or returns the input.
+- The ORT Objective-C bindings can't read bool tensors (`cap_preds`), so
+  `PunctuationRuntime` calls the ORT C API directly.
+- Model files are pinned to revision `b26fd1c4` and SHA-256 verified, downloaded
+  once (about 210 MB) into Application Support at launch while the setting is on.
+  English locale only, skipped for Verbatim. Until installed, dictation keeps
+  rules-only punctuation.
+- A mid-sentence model capital is ignored on common function words (it
+  capitalized "the" after "she said"). Recognizer "?" and "!" are kept.
+- HUD: `NSHostingView.sizingOptions = []` and a fixed waveform height, so the
+  notch HUD no longer resizes (and bobs) with every syllable.
+- Verification: Swift output matched the Python `punctuators` reference exactly
+  on the same input; tokenizer ids match SentencePiece (test). `--punctuate` over
+  50 real history entries: 0 failures, median 10 ms, max 130 ms. XCTest: 375
+  tests, 0 failures. `--selftest` exit 0. `make_app.sh` built and relaunched;
+  no errors in the `local.murmur` log. HUD not yet confirmed by eye.
+- Next: owner dictates a few run-on messages and confirms the HUD stays still.
 
 ### 2026-09-28 — Claude app launch fix
 

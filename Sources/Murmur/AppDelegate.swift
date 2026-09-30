@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         refreshPermissions(promptAccessibility: true)
         wireHotkey()
+        preparePunctuator()
         hotkeyMonitor.startMonitoring()
         transformManager.onStatus = { [weak self] status in
             self?.transformStatus = status
@@ -396,6 +397,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func setGrammarPunctuation(_ on: Bool) {
         Settings.grammarPunctuation = on
         grammarPunctuation = on
+        if on { preparePunctuator() }
+    }
+
+    /// Fetches the punctuation model once and loads it, so the first
+    /// dictation after launch doesn't wait on either. Until it's ready,
+    /// dictations keep the rules-only punctuation.
+    func preparePunctuator() {
+        guard Settings.usesGrammarPunctuation else { return }
+        Task.detached(priority: .utility) {
+            if !PunctuationModelFiles.isInstalled {
+                do {
+                    try await PunctuationModelFiles.download()
+                } catch {
+                    await MainActor.run {
+                        self.lastError = "Couldn't download the punctuation model: "
+                            + error.localizedDescription
+                    }
+                    return
+                }
+            }
+            Punctuator.shared.warmUp()
+        }
     }
 
     func setSpokenSymbols(_ on: Bool) {
@@ -710,19 +733,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 run: { try await engine.rewrite($0, instructions: instructions) })
         }
 
-        // Cleaned re-punctuates by grammar instead of by pauses. The guard
-        // on `.punctuationOnly` rejects any change to the words themselves,
-        // so this is the one model pass that cannot act on what was said.
-        if level == .cleaned, Settings.grammarPunctuation,
-           RewriteEngine.needsPunctuationPass(text) {
-            return RewritePass(
-                announcement: nil,
-                confirmation: nil,
-                profile: .punctuationOnly,
-                context: "grammar-punctuation",
-                failureLabel: nil,
-                run: { try await engine.repunctuate($0) })
-        }
         return nil
     }
 
@@ -1034,6 +1044,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                         : formatter.format(
                             raw, spokenLayout: spokenLayout,
                             spokenSymbols: spokenSymbols)
+                    // Commas and periods by grammar, not by where the
+                    // speaker paused. Only punctuation and first-letter
+                    // case can change; see Punctuator.
+                    if Settings.usesGrammarPunctuation {
+                        text = Punctuator.shared.punctuate(text)
+                    }
                     text = LearnedStore.apply(in: text)
                     return SnippetStore.expand(in: text)
                     }.value
@@ -1362,12 +1378,19 @@ enum Settings {
         set { defaults.set(newValue, forKey: "joinFragments") }
     }
 
-    /// Re-punctuate Cleaned dictations by grammar with the on-device model,
-    /// instead of keeping a period at every pause. ON by default. Only
-    /// punctuation and capitals can change; see `acceptedPunctuation`.
+    /// Re-punctuate dictations by grammar with the on-device punctuation
+    /// model, instead of keeping a period at every pause. ON by default.
+    /// Only punctuation and first-letter case can change; see `Punctuator`.
     static var grammarPunctuation: Bool {
         get { defaults.object(forKey: "grammarPunctuation") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "grammarPunctuation") }
+    }
+
+    /// The punctuation model is English only, and Verbatim means verbatim.
+    static var usesGrammarPunctuation: Bool {
+        grammarPunctuation
+            && locale.language.languageCode == .english
+            && CleanupLevel.resolve(cleanupLevel) != .verbatim
     }
 
     /// How aggressively dictations are cleaned up: 0 Verbatim,
@@ -1386,7 +1409,7 @@ enum Settings {
     ///      vocabulary or punctuation the speaker did not use;
     ///   4. every rejection degrades to the rules-only text, silently.
     /// Normal hold-to-talk never rewords unless changed here. Its only model
-    /// pass is `grammarPunctuation`, which must return identical words.
+    /// is `Punctuator`, which labels words and cannot generate any.
     static var cleanupLevel: Int {
         get {
             let level = defaults.object(forKey: "cleanupLevel") as? Int ?? 1

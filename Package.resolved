@@ -1,6 +1,15 @@
 {
-  "originHash" : "89edaf81afd30307fdd5007233950ac02478ee75628fca4583eb3a7751c66fe1",
+  "originHash" : "0dbfcf2b506cac488fe1f1383a75447274a0fa69aa88f4496448f7141db7323b",
   "pins" : [
+    {
+      "identity" : "onnxruntime-swift-package-manager",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/microsoft/onnxruntime-swift-package-manager",
+      "state" : {
+        "revision" : "b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2",
+        "version" : "1.24.2"
+      }
+    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",

@@ -12,9 +12,9 @@ import Foundation
 ///   each a separate opt-in and are off at every stop unless the user
 ///   turns them on.
 /// - cleaned (default): the rule-based pass (fillers out, caps,
-///   punctuation), then, while "Punctuate by grammar" is on, a model pass
-///   that may only move punctuation and capitals. `acceptedPunctuation`
-///   rejects any change to the words, so nothing the user says can be
+///   punctuation), then, while "Punctuate by grammar" is on, `Punctuator`:
+///   a token classifier that can only label words with punctuation and
+///   capitals. It cannot generate text, so nothing the user says can be
 ///   acted on — this is why it, and not `polished`, is the stop an
 ///   un-opted-in user lands on.
 /// - polished: rules, then a light on-device model pass that fixes

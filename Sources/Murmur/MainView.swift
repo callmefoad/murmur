@@ -1180,9 +1180,10 @@ struct SettingsPage: View {
                 toggleRow(
                     title: "Punctuate by grammar",
                     detail: "Puts commas and periods where the sentence needs " +
-                            "them instead of wherever you paused. Uses the " +
-                            "on-device model and adds about half a second. " +
-                            "Your words never change, only the punctuation.",
+                            "them instead of wherever you paused. English only. " +
+                            "Runs on this Mac in a few milliseconds after a " +
+                            "one-time 210 MB download. Your words never change, " +
+                            "only the punctuation.",
                     isOn: Binding(
                         get: { app.grammarPunctuation },
                         set: { app.setGrammarPunctuation($0) }))

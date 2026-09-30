@@ -107,7 +107,13 @@ final class DictationHUD {
         panel.isReleasedWhenClosed = false
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: DictationHUDContent(model: model))
+        let hosting = NSHostingView(rootView: DictationHUDContent(model: model))
+        // By default the hosting view resizes its window to fit the content.
+        // The bars change height with every syllable, and a resize keeps the
+        // bottom edge fixed, so the whole HUD bobbed up and down while the
+        // user talked. The frame is set in `show()` and never follows content.
+        hosting.sizingOptions = []
+        panel.contentView = hosting
         self.panel = panel
         return panel
     }
@@ -257,6 +263,9 @@ private struct WaveformBars: View {
                     .frame(width: 4, height: barHeight(weights[index]))
             }
         }
+        // Fixed to the tallest bar so the meter never changes the layout
+        // around it; bars grow and shrink from the middle of this box.
+        .frame(height: 28)
         .animation(.linear(duration: 0.09), value: level)
     }
 

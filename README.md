@@ -71,7 +71,8 @@ speech and language models, with an optional local Whisper engine.
 - Apple Silicon Mac
 - Xcode 26 command-line tools (`xcode-select --install`)
 - For Styles / Transforms / Voice Profile: Apple Intelligence enabled
-- For the Parakeet engine: a one-time model download (about 600 MB)
+- For the Parakeet engine: a one-time model download (about 600 MB, plus a
+  1 MB voice-activity model that lets it transcribe while you talk)
 - For the Whisper engine: a one-time model download (150 MB – 1.6 GB)
 
 ## Build & run

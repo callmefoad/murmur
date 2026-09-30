@@ -229,3 +229,30 @@ commit/push status, and the next step so the other agent can resume.”
 - Confirmed code review through GitHub; Claude reported that its local Xcode
   license gate prevented a build/test run. This is not evidence of a passing or
   failing test suite.
+
+### 2026-09-29 — Claude: live Parakeet + silence trimming
+
+- Files: `Sources/Murmur/SpeechSegmenter.swift` (new),
+  `Sources/Murmur/ParakeetEngine.swift`, `Sources/Murmur/AudioRecorder.swift`,
+  `Sources/Murmur/AppDelegate.swift`, `Sources/Murmur/Main.swift`,
+  `Sources/Murmur/MainView.swift`, `README.md`,
+  `Tests/MurmurTests/SpeechSegmenterTests.swift` (new).
+- With the Parakeet engine, recording now streams: audio is resampled to
+  16 kHz, FluidAudio's Silero VAD (1 MB, loaded with Parakeet) scores each
+  256 ms, and `SpeechSegmenter` cuts at a ~0.77 s pause once a segment holds
+  ~8 s of speech. Each segment transcribes in the background; silence at cuts
+  and before the first word is dropped. On release only the tail is left.
+- The 8 s minimum is deliberate: cutting at every pause lost context on a
+  whispered clip ("Can you" became "You", "Thanks" became "Serious").
+- Safety: any live failure, empty result, or dropped stream buffer (new
+  `AudioRecorder.streamDroppedAudio`) silently falls back to transcribing the
+  full file with Parakeet. No speech-content behavior changed.
+- New CLI: `Murmur --transcribe <file> --engine parakeet-live` plays a file
+  into the live path in real time and prints release-to-text time.
+- Verification: `swift build --build-tests && xcrun xctest
+  .build/debug/MurmurTests.xctest` = 387 tests, 0 failures. `--selftest`
+  exit 0. Live vs file transcripts identical on 33 s, whispered, and one-word
+  clips. 2-minute clip: file path 654 ms (includes model load), live
+  128 ms release-to-text, 0 dropped frames. App rebuilt and relaunched.
+- Next: Taylor tests long dictations live; then idea #1 (learn from fixes)
+  or #4 (style per app) from the upgrade list.

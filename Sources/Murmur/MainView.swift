@@ -1009,7 +1009,8 @@ struct SettingsPage: View {
         case "parakeet":
             return app.parakeetReady
                 ? "Parakeet: NVIDIA's speech model. More accurate than " +
-                  "Apple's, about a quarter second per dictation. Runs locally."
+                  "Apple's. Transcribes at your pauses while you talk, so even " +
+                  "long dictations paste in about a tenth of a second. Runs locally."
                 : "Parakeet: downloading or loading (one-time, about 600 MB). " +
                   "Apple engine covers dictations until it's ready."
         default:

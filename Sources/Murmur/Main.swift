@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Foundation
 
@@ -125,6 +126,35 @@ struct MurmurMain {
                     FileHandle.standardError.write(Data(String(
                         format: "parakeet %.0f ms (includes load)\n",
                         Date().timeIntervalSince(started) * 1000).utf8))
+                } else if engineName == "parakeet-live" {
+                    // Plays the file into the live path at real-time pace,
+                    // as if spoken, and times release-to-text.
+                    let parakeet = ParakeetEngine()
+                    parakeet.preload()
+                    var live = parakeet.liveTranscriber()
+                    while live == nil {
+                        try await Task.sleep(for: .milliseconds(200))
+                        live = parakeet.liveTranscriber()
+                    }
+                    let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+                    let format = file.processingFormat
+                    let (stream, continuation) = AsyncStream<AVAudioPCMBuffer>.makeStream()
+                    let task = Task { try await live!.transcribe(buffers: stream, inputFormat: format) }
+                    while file.framePosition < file.length {
+                        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)
+                        else { break }
+                        try file.read(into: buffer, frameCount: 4096)
+                        continuation.yield(buffer)
+                        try await Task.sleep(for: .seconds(Double(buffer.frameLength) / format.sampleRate))
+                    }
+                    let released = Date()
+                    continuation.finish()
+                    let result = try await task.value
+                    raw = result.text
+                    FileHandle.standardError.write(Data(String(
+                        format: "parakeet-live release-to-text %.0f ms, %d segments, %lld/%lld frames\n",
+                        Date().timeIntervalSince(released) * 1000, result.segments,
+                        result.inputFrames, file.length).utf8))
                 } else if engineName == "whisper" {
                     let whisper = WhisperEngine()
                     whisper.onStatus = { status in
@@ -184,7 +214,7 @@ struct MurmurMain {
         Usage:
           Murmur                      run as menu bar app
           Murmur --transcribe <file>  transcribe an audio file
-                                      [--locale en-US] [--engine apple|parakeet|whisper]
+                                      [--locale en-US] [--engine apple|parakeet|parakeet-live|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
           Murmur --format "<text>"    run the text formatter on a string
           Murmur --polish "<text>"    run the tap-then-hold model cleanup

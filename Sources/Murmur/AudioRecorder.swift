@@ -46,6 +46,16 @@ final class AudioRecorder {
     private var cancelStartRequested = false
     /// Live buffer sink, non-nil only while a streaming recording is in flight.
     private var streamContinuation: AsyncStream<AVAudioPCMBuffer>.Continuation?
+    /// Buffers the bounded stream threw away because its consumer fell
+    /// behind. Guarded by `fileLock`, reset when a streaming start begins.
+    private var droppedStreamBuffers = 0
+
+    /// True when the last streaming recording lost audio on the live path.
+    /// The file still has everything, so a caller that sees this should
+    /// transcribe the file instead.
+    var streamDroppedAudio: Bool {
+        fileLock.withLock { droppedStreamBuffers > 0 }
+    }
     private(set) var currentFileURL: URL?
     private(set) var isRecording = false
 
@@ -129,6 +139,7 @@ final class AudioRecorder {
             bufferingPolicy: .bufferingNewest(Self.streamBufferCount))
         fileLock.withLock {
             streamContinuation = continuation
+            droppedStreamBuffers = 0
         }
         do {
             try start(publishingBuffers: true)
@@ -224,8 +235,9 @@ final class AudioRecorder {
             let copy = publishingBuffers ? Self.copy(buffer) : nil
             self.fileLock.withLock {
                 try? self.file?.write(from: buffer)
-                if let copy {
-                    self.streamContinuation?.yield(copy)
+                if let copy, let continuation = self.streamContinuation,
+                   case .dropped = continuation.yield(copy) {
+                    self.droppedStreamBuffers += 1
                 }
             }
             if let onLevel = self.onLevel {

@@ -858,6 +858,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// Live transcription in flight, when `Settings.streamingTranscription`
     /// is on. Nil for the default file-based path.
     private var streamingTask: Task<String, Error>?
+    /// The live transcript comes from Parakeet, whose file path is the same
+    /// engine: falling back to it is routine, not worth a notification.
+    private var streamingFallsBackQuietly = false
+    private static let liveLogger = Logger(subsystem: "local.murmur", category: "live")
     private var forcePolishedForCurrentDictation = false
     private var polishNextDictation = false
 
@@ -929,9 +933,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         NSSound(named: "Pop")?.play()
         if Settings.liveCaptions { hud.show() }
 
-        if streamingEnabled {
+        // Parakeet transcribes at each pause while the user is still
+        // talking, once its model and the voice-activity model are loaded.
+        let parakeetLive = Settings.engine == "parakeet"
+            ? parakeetEngine.liveTranscriber() : nil
+        if streamingEnabled || parakeetLive != nil {
             let started = recorder.startStreamingAsync { [weak self] result in
-                self?.finishStreamingStart(result)
+                self?.finishStreamingStart(result, parakeetLive: parakeetLive)
             }
             if !started {
                 failRecordingStart("Microphone startup is already in progress.")
@@ -962,7 +970,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     private func finishStreamingStart(
-        _ result: Result<AudioRecorder.StreamingStart, Error>
+        _ result: Result<AudioRecorder.StreamingStart, Error>,
+        parakeetLive: ParakeetLiveTranscriber? = nil
     ) {
         guard uiState == .recording else {
             if case .success = result { recorder.cancel() }
@@ -973,6 +982,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             failRecordingStart("Could not start recording: \(error.localizedDescription)")
         case .success(let started):
             recordingStartedAt = Date()
+            streamingFallsBackQuietly = parakeetLive != nil
+            if let parakeetLive {
+                let recorder = self.recorder
+                streamingTask = Task {
+                    let result = try await parakeetLive.transcribe(
+                        buffers: started.stream, inputFormat: started.format)
+                    // Audio the live path never saw would be missing words.
+                    if recorder.streamDroppedAudio {
+                        throw NSError(domain: "Murmur", code: 44, userInfo: [
+                            NSLocalizedDescriptionKey: "live audio fell behind",
+                        ])
+                    }
+                    return result.text
+                }
+                return
+            }
             let transcriber = self.transcriber
             streamingTask = Task {
                 // The vocabulary read touches several JSON files; fetch
@@ -1000,7 +1025,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// lost to a streaming failure — the user just waits the old amount of time
     /// and sees why in `lastError`.
     private func streamedTranscript(
-        from task: Task<String, Error>, fallingBackTo url: URL) async throws -> String {
+        from task: Task<String, Error>, fallingBackTo url: URL,
+        quietly: Bool = false) async throws -> String {
+        if quietly {
+            do {
+                let text = try await task.value
+                if !text.isEmpty { return text }
+                Self.liveLogger.info("live transcript empty, transcribing file")
+            } catch {
+                Self.liveLogger.error(
+                    "live transcript failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return try await recognize(fileAt: url)
+        }
         do {
             let text = try await task.value
             if !text.isEmpty { return text }
@@ -1027,6 +1064,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         let streaming = streamingTask
         streamingTask = nil
+        let quietFallback = streamingFallsBackQuietly
+        streamingFallsBackQuietly = false
         guard let url = recorder.stop() else {
             streaming?.cancel()
             recordingStartedAt = nil
@@ -1050,7 +1089,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             do {
                 let raw: String
                 if let streaming {
-                    raw = try await streamedTranscript(from: streaming, fallingBackTo: url)
+                    raw = try await streamedTranscript(
+                        from: streaming, fallingBackTo: url, quietly: quietFallback)
                 } else {
                     raw = try await recognize(fileAt: url)
                 }

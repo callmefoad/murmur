@@ -78,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @Published var engine: String = Settings.engine
     @Published var whisperModel: String = Settings.whisperModel
     @Published var whisperReady = false
+    let parakeetEngine = ParakeetEngine()
+    @Published var parakeetReady = false
     /// My Voice preset forced onto every dictation regardless of app
     /// bindings. nil means no forcing — resolution falls through to the
     /// store's per-app bindings. Persisted in Settings so the menu-bar
@@ -175,6 +177,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         if Settings.engine == "whisper" {
             whisperEngine.preload(model: Settings.whisperModel)
+        }
+        parakeetEngine.onStatus = { [weak self] status in
+            Task { @MainActor in
+                guard let self else { return }
+                self.transformStatus = status
+                self.parakeetReady = self.parakeetEngine.isReady
+            }
+        }
+        parakeetEngine.onError = { [weak self] message in
+            Task { @MainActor in
+                self?.lastError = message
+            }
+        }
+        if Settings.engine == "parakeet" {
+            parakeetEngine.preload()
         }
         showMainWindow()
 
@@ -335,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
         let ready = whisperEngine.isReady(model: Settings.whisperModel)
         if whisperReady != ready { whisperReady = ready }
+        if parakeetReady != parakeetEngine.isReady { parakeetReady = parakeetEngine.isReady }
     }
 
     // MARK: - Settings changes (from window or menu)
@@ -347,12 +365,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func setEngine(_ newEngine: String) {
-        let resolved = newEngine == "whisper" && !WhisperEngine.isAvailableInBuild
-            ? "apple" : newEngine
+        let unavailable = (newEngine == "whisper" && !WhisperEngine.isAvailableInBuild)
+            || (newEngine == "parakeet" && !ParakeetEngine.isAvailableInBuild)
+        let resolved = unavailable ? "apple" : newEngine
         Settings.engine = resolved
         engine = resolved
         if resolved == "whisper" {
             whisperEngine.preload(model: Settings.whisperModel)
+        }
+        if resolved == "parakeet" {
+            parakeetEngine.preload()
         }
     }
 
@@ -622,8 +644,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// Whisper: while its model is still downloading or loading, Apple's
     /// engine handles the dictation, and Whisper takes over once ready.
     /// Whisper failures also fall back to Apple so a keypress always
-    /// produces text.
+    /// produces text. Parakeet follows the same rules.
     private func recognize(fileAt url: URL) async throws -> String {
+        if Settings.engine == "parakeet" {
+            if parakeetEngine.isReady {
+                do {
+                    let text = try await parakeetEngine.transcribe(fileAt: url)
+                    if !text.isEmpty { return text }
+                } catch {
+                    lastError = "Parakeet engine failed " +
+                        "(\(error.localizedDescription)) — used Apple engine instead."
+                }
+            } else {
+                parakeetEngine.preload()
+                lastError = "Parakeet model is still preparing — used Apple " +
+                    "engine for this dictation. Parakeet takes over when ready."
+            }
+        }
         // Nonisolated async: the up-to-four-file vocabulary read runs off
         // the main actor instead of stalling it before transcription starts.
         let biasTerms = await LearnedStore.biasTerms()
@@ -828,7 +865,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// transcribes a finished file, so the Whisper engine always takes the
     /// file path regardless of the flag.
     private var streamingEnabled: Bool {
-        Settings.streamingTranscription && Settings.engine != "whisper"
+        Settings.streamingTranscription && Settings.engine == "apple"
     }
 
     /// Consumes a hotkey press as an undo when the last insertion is still
@@ -1335,7 +1372,8 @@ enum Settings {
         set { defaults.set(newValue, forKey: "locale") }
     }
 
-    /// Recognition engine: "apple" (instant) or "whisper" (precise).
+    /// Recognition engine: "apple" (instant), "parakeet" (fast,
+    /// accurate) or "whisper" (precise).
     static var engine: String {
         get { defaults.string(forKey: "engine") ?? "apple" }
         set { defaults.set(newValue, forKey: "engine") }

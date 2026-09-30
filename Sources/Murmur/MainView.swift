@@ -1001,6 +1001,22 @@ struct SettingsPage: View {
     @State private var whisperModelDownloaded = false
     @State private var showPurgeConfirm = false
 
+    private var engineDetail: String {
+        switch app.engine {
+        case "whisper":
+            return "Whisper: best accuracy on accents and jargon; " +
+                "your vocabulary is fed to the model. Runs locally."
+        case "parakeet":
+            return app.parakeetReady
+                ? "Parakeet: NVIDIA's speech model. More accurate than " +
+                  "Apple's, about a quarter second per dictation. Runs locally."
+                : "Parakeet: downloading or loading (one-time, about 600 MB). " +
+                  "Apple engine covers dictations until it's ready."
+        default:
+            return "Apple: instant, built into macOS. Runs locally."
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Settings")
@@ -1095,10 +1111,7 @@ struct SettingsPage: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Recognition engine")
-                        Text(app.engine == "whisper"
-                            ? "Whisper: best accuracy on accents and jargon; " +
-                              "your vocabulary is fed to the model. Runs locally."
-                            : "Apple: instant, built into macOS. Runs locally.")
+                        Text(engineDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1107,6 +1120,9 @@ struct SettingsPage: View {
                         get: { app.engine },
                         set: { app.setEngine($0) })) {
                         Text("Apple — instant").tag("apple")
+                        if ParakeetEngine.isAvailableInBuild {
+                            Text("Parakeet — fast + accurate").tag("parakeet")
+                        }
                         if WhisperEngine.isAvailableInBuild {
                             Text("Whisper — precise").tag("whisper")
                         }

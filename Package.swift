@@ -18,12 +18,17 @@ let packageDependencies: [Package.Dependency] = [
     .package(
         url: "https://github.com/argmaxinc/WhisperKit.git",
         .upToNextMinor(from: "1.0.0")),
+    // Parakeet engine (see ParakeetEngine.swift).
+    .package(
+        url: "https://github.com/FluidInference/FluidAudio.git",
+        exact: "0.17.4"),
 ])
 let murmurDependencies: [Target.Dependency] = [
     .product(name: "Sparkle", package: "Sparkle"),
     "PunctuationRuntime",
 ] + (liteBuild ? [] : [
     .product(name: "WhisperKit", package: "WhisperKit"),
+    .product(name: "FluidAudio", package: "FluidAudio"),
 ])
 
 let package = Package(

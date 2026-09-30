@@ -71,6 +71,7 @@ speech and language models, with an optional local Whisper engine.
 - Apple Silicon Mac
 - Xcode 26 command-line tools (`xcode-select --install`)
 - For Styles / Transforms / Voice Profile: Apple Intelligence enabled
+- For the Parakeet engine: a one-time model download (about 600 MB)
 - For the Whisper engine: a one-time model download (150 MB – 1.6 GB)
 
 ## Build & run
@@ -141,8 +142,8 @@ Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
 Profile analysis. Audio and transcript content are not sent to Murmur's
 servers. Murmur connects to GitHub for signed app updates, macOS/Apple for
 on-device speech assets, and Hugging Face once for the punctuation model
-(while "Punctuate by grammar" is on) and if you enable Whisper and its model
-isn't installed yet; those requests download updates or models, not dictation.
+(while "Punctuate by grammar" is on) and if you enable Parakeet or Whisper and
+its model isn't installed yet; those requests download updates or models, not dictation.
 Dictation data is stored only in `~/Library/Application Support/Murmur/`.
 
 ## Architecture

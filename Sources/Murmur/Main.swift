@@ -113,7 +113,19 @@ struct MurmurMain {
         case .transcribe(let path):
             do {
                 let raw: String
-                if engineName == "whisper" {
+                if engineName == "parakeet" {
+                    let parakeet = ParakeetEngine()
+                    parakeet.onStatus = { status in
+                        if let status {
+                            FileHandle.standardError.write(Data("\(status)\n".utf8))
+                        }
+                    }
+                    let started = Date()
+                    raw = try await parakeet.transcribe(fileAt: URL(fileURLWithPath: path))
+                    FileHandle.standardError.write(Data(String(
+                        format: "parakeet %.0f ms (includes load)\n",
+                        Date().timeIntervalSince(started) * 1000).utf8))
+                } else if engineName == "whisper" {
                     let whisper = WhisperEngine()
                     whisper.onStatus = { status in
                         if let status {
@@ -172,7 +184,7 @@ struct MurmurMain {
         Usage:
           Murmur                      run as menu bar app
           Murmur --transcribe <file>  transcribe an audio file
-                                      [--locale en-US] [--engine apple|whisper]
+                                      [--locale en-US] [--engine apple|parakeet|whisper]
                                       [--whisper-model base|small|large-v3-v20240930_turbo]
           Murmur --format "<text>"    run the text formatter on a string
           Murmur --polish "<text>"    run the tap-then-hold model cleanup

@@ -67,6 +67,28 @@ commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
 
+### 2026-09-29 — Claude Parakeet recognition engine
+
+- Files: `Package.swift`, `Package.resolved`, `Sources/Murmur/ParakeetEngine.swift`
+  (new), `Sources/Murmur/AppDelegate.swift`, `Sources/Murmur/MainView.swift`,
+  `Sources/Murmur/Main.swift`, `README.md`.
+- Added FluidAudio 0.17.4 (Apache 2.0, full build only, like WhisperKit) and a
+  third engine, "Parakeet — fast + accurate", using Parakeet Ultra (`.ultra`).
+  Same rules as Whisper: Apple covers dictations until the model is loaded, and
+  any Parakeet failure falls back to Apple. Streaming stays Apple-only.
+- Parakeet also ends sentences at long pauses, so the Punctuator still runs
+  after it. Dictionary/learned corrections still apply after recognition
+  (FluidAudio vocabulary boosting only exists for the 110M model).
+- Verification: `--transcribe <file> --engine parakeet` on a synthetic
+  recording with 0.7-0.9 s pauses: model download plus first load 31 s, then
+  236 ms per run including load in a fresh process. It caught a leading "I"
+  Apple dropped. Parakeet plus Punctuator output was correct. XCTest: 375
+  tests, 0 failures. `--selftest` exit 0. App rebuilt, engine default for this
+  Mac set to `parakeet` via `defaults write local.murmur engine parakeet`, app
+  relaunched and running.
+- Next: owner compares Parakeet against Apple on real dictation. If it holds up,
+  consider making Parakeet the default for new installs.
+
 ### 2026-09-29 — Claude punctuation model replaces the LLM pass, HUD stays put
 
 - Files: `Package.swift`, `Package.resolved`,

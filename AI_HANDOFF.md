@@ -76,7 +76,7 @@ commit/push status, and the next step so the other agent can resume.”
 - Verification: `swift build --disable-sandbox` completed successfully;
   `swiftc -frontend -parse Sources/Murmur/*.swift` and `git diff --check`
   passed. Existing WhisperKit non-Sendable warning remains. XCTest not run.
-- Commit/push: pending.
+- Commit/push: `f5f2cdf` pushed to `origin/main`.
 - Next: full XCTest run when requested/available; continue only with a concrete
   repeated responsibility or proven duplicate, not line count alone.
 

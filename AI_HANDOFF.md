@@ -86,7 +86,8 @@ commit/push status, and the next step so the other agent can resume.”
   `swiftc -frontend -parse Sources/Murmur/*.swift` and `git diff --check`
   passed. Build still reports the existing WhisperKit non-Sendable warning.
   XCTest was not run.
-- Commit/push: not yet committed or pushed.
+- Commit/push: implementation committed as `f51d1a2` and pushed to
+  `origin/main`.
 - Next: run XCTest and compare live Parakeet output on long recordings before
   treating buffer reclamation as behaviorally verified.
 

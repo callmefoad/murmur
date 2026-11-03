@@ -10,9 +10,9 @@ your dictation.
 
 ![Murmur dashboard](Resources/screenshot.png)
 
-Murmur is an open-source, fully local take on the modern AI dictation app
-(in the spirit of Wispr Flow), built natively in Swift on Apple's on-device
-speech and language models, with an optional local Whisper engine.
+Murmur is an open-source, local-first dictation app built natively in Swift.
+Speech recognition, punctuation, cleanup, and rewriting run on the Mac. It
+offers Apple's SpeechAnalyzer plus optional local Parakeet and Whisper engines.
 
 ## Features
 
@@ -28,8 +28,11 @@ speech and language models, with an optional local Whisper engine.
   `defaults write local.murmur undoWindowSeconds -float 2`.
 - **Dictation HUD** — optional floating microphone and waveform indicator while
   you speak; it never displays transcript text.
-- **Two recognition engines**, both offline:
+- **Three recognition engines**, all running locally:
   - **Apple** — instant, built into macOS (SpeechAnalyzer, macOS 26).
+  - **Parakeet** — NVIDIA's Parakeet model through FluidAudio. With the model
+    loaded, it transcribes completed speech segments while you are still
+    speaking; only the final segment waits for release.
   - **Whisper** — optional precision engine via
     [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML on the
     Neural Engine). Your vocabulary is fed into the decoder prompt.
@@ -72,8 +75,10 @@ speech and language models, with an optional local Whisper engine.
 - Xcode 26 command-line tools (`xcode-select --install`)
 - For Styles / Transforms / Voice Profile: Apple Intelligence enabled
 - For the Parakeet engine: a one-time model download (about 600 MB, plus a
-  1 MB voice-activity model that lets it transcribe while you talk)
+  small voice-activity model for live segmentation)
 - For the Whisper engine: a one-time model download (150 MB – 1.6 GB)
+- For grammar-based punctuation: a one-time punctuation model download
+  (about 210 MB)
 
 ## Build & run
 
@@ -107,9 +112,10 @@ Sparkle-enabled, notarized app once;
 future releases appear in Murmur's `Check for Updates…` menu item or install
 automatically according to the user's update preference.
 
-For a faster clean build with no WhisperKit dependency, build the Apple-only
-edition with `MURMUR_LITE=1 swift build -c release`. The app hides Whisper
-automatically; Apple on-device recognition remains fully functional.
+For a smaller build without WhisperKit or FluidAudio, use
+`MURMUR_LITE=1 swift build -c release`. Apple Speech remains available;
+Parakeet and Whisper are omitted. Sparkle and the punctuation runtime remain
+included.
 
 Optional: run `./scripts/make_signing_cert.sh` once to create a local
 self-signed signing certificate — this keeps macOS permission grants valid
@@ -131,34 +137,41 @@ restart of a running instance after each build.
 .build/debug/Murmur --selftest                          # formatter + learning tests
 .build/debug/Murmur --transcribe audio.wav              # Apple engine
 .build/debug/Murmur --transcribe audio.wav --engine whisper
+.build/debug/Murmur --transcribe audio.wav --engine parakeet
+.build/debug/Murmur --transcribe audio.wav --engine parakeet-live
 .build/debug/Murmur --format "um hello new line hi"     # cleanup pipeline only
-.build/debug/Murmur --transform "fix this grammer pls"  # on-device LLM polish
+.build/debug/Murmur --polish "fix this grammer pls"     # on-device rewrite
 .build/debug/Murmur --needs-polish "yeah that works"   # would this pay for a model pass?
+.build/debug/Murmur --punctuate "i was talking then i paused" # punctuation path
 ```
 
 ## Privacy
 
-Everything runs on this Mac: recognition (Apple SpeechAnalyzer or local
-Whisper), cleanup, tone rewriting (Apple Intelligence), and the Voice
-Profile analysis. Audio and transcript content are not sent to Murmur's
-servers. Murmur connects to GitHub for signed app updates, macOS/Apple for
-on-device speech assets, and Hugging Face once for the punctuation model
-(while "Punctuate by grammar" is on) and if you enable Parakeet or Whisper and
-its model isn't installed yet; those requests download updates or models, not dictation.
+Recognition (Apple SpeechAnalyzer, local Parakeet, or local Whisper), cleanup,
+punctuation, tone rewriting (Apple Intelligence), and Voice Profile analysis
+run on this Mac. Audio and transcript content are not sent to Murmur's
+servers. Network access is used for signed app updates, Apple's speech assets,
+and optional model downloads (Parakeet, Whisper, and punctuation); those
+requests download software and models, not dictation.
 Dictation data is stored only in `~/Library/Application Support/Murmur/`.
 
 ## Architecture
 
-Swift Package, with Sparkle for updates and WhisperKit only when the Whisper
-engine is included:
+Swift Package, with Sparkle for updates, ONNX Runtime for punctuation, and
+WhisperKit/FluidAudio only in full builds:
 
 ```
-HotkeyMonitor  →  AudioRecorder  →  Transcriber (Apple) / WhisperEngine
-                                        ↓
-     TextFormatter → LearnedStore → SnippetStore → RewriteEngine (model)
-                                        ↓
-                     TextInserter (direct AX, clipboard + ⌘V fallback)
+HotkeyMonitor → AudioRecorder → Apple Speech / Parakeet / Whisper
+                                      ↓
+     TextFormatter → Learned corrections → Snippets → Punctuator
+                                      ↓
+                     optional RewriteEngine → TextInserter
 ```
+
+The Parakeet live path uses voice activity detection to cut long recordings
+at pauses. Completed segments are transcribed in the background; Murmur keeps
+only audio that can still belong to the unfinished segment. A live failure
+falls back to the full recording.
 
 `TextFormatter` is a pure function of its arguments: every gate that reads
 speech content is threaded in explicitly rather than read from settings
@@ -168,7 +181,8 @@ any rewrite that diverges too far from what was actually said.
 
 ## Design documents
 
-- [PLAN.md](PLAN.md) — the original design document.
+- [PLAN.md](PLAN.md) — original design notes; some planned work has since
+  shipped or been removed. The current implementation is described above.
 - [docs/voice.md](docs/voice.md) — which parts of the owner's writing style
   are guaranteed in code and which are only requested of the model, and why
   the line falls where it does.

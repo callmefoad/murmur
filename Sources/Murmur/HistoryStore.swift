@@ -53,14 +53,13 @@ final class HistoryStore {
     /// each time, so rapid dictations persist history.json in insertion
     /// order even though `add` returns before the write lands — and the
     /// encode+write never runs on main.
-    private static let writer = DispatchQueue(
-        label: "local.murmur.history", qos: .utility)
+    private static let writer = JSONFileWriter(label: "local.murmur.history")
 
     /// Blocks until every snapshot enqueued so far has hit disk. Tests
     /// share the real on-disk file and need a quiesced state across
     /// setUp/tearDown boundaries.
     static func flushPendingWrites() {
-        writer.sync(flags: .barrier) {}
+        writer.flush()
     }
     private var fileURL: URL {
         Self.fileOverride ?? AppPaths.supportDirectory.appendingPathComponent(
@@ -172,18 +171,6 @@ final class HistoryStore {
         // serial FIFO submission keeps write order == mutation order.
         let snapshot = entries
         let url = fileURL
-        Self.writer.async { [logger] in
-            do {
-                let data = try JSONEncoder().encode(snapshot)
-                try data.write(to: url, options: .atomic)
-                AppPaths.secure(url)
-            } catch {
-                logger.error(
-                    """
-                    Failed to save \(url.path, privacy: .public): \
-                    \(String(describing: error), privacy: .public)
-                    """)
-            }
-        }
+        Self.writer.write(snapshot, to: url, logger: logger)
     }
 }

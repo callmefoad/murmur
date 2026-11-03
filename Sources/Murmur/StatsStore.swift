@@ -90,14 +90,13 @@ final class StatsStore {
     /// `record` mutates on the main actor and enqueues an immutable
     /// snapshot, so rapid dictations persist stats.json in recording order
     /// and the encode+write never runs on main.
-    private static let writer = DispatchQueue(
-        label: "local.murmur.stats", qos: .utility)
+    private static let writer = JSONFileWriter(label: "local.murmur.stats")
 
     /// Blocks until every snapshot enqueued so far has hit disk. Tests
     /// share the real on-disk file and need a quiesced state across
     /// setUp/tearDown boundaries.
     static func flushPendingWrites() {
-        writer.sync(flags: .barrier) {}
+        writer.flush()
     }
     private var fileURL: URL {
         AppPaths.supportDirectory.appendingPathComponent("stats.json")
@@ -199,18 +198,6 @@ final class StatsStore {
         // it, and serial FIFO submission keeps write order == record order.
         let snapshot = stats
         let url = fileURL
-        Self.writer.async { [logger] in
-            do {
-                let data = try JSONEncoder().encode(snapshot)
-                try data.write(to: url, options: .atomic)
-                AppPaths.secure(url)
-            } catch {
-                logger.error(
-                    """
-                    Failed to save \(url.path, privacy: .public): \
-                    \(String(describing: error), privacy: .public)
-                    """)
-            }
-        }
+        Self.writer.write(snapshot, to: url, logger: logger)
     }
 }

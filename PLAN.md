@@ -1,4 +1,8 @@
-# Murmur — Local Wispr Flow Rebuild
+# Murmur — Original design notes (historical)
+
+> This file records the initial project plan. It predates the current Parakeet,
+> Whisper, punctuation, rewrite, dashboard, and updater implementations. Use
+> `README.md` and `AI_HANDOFF.md` for the current feature set and shared status.
 
 A fully local macOS dictation app that reproduces Wispr Flow's core loop:
 **hold a key → speak → release → clean text appears at your cursor in any app.**

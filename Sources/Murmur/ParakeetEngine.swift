@@ -167,16 +167,23 @@ struct ParakeetLiveTranscriber: Sendable {
         }
         let chunk = SpeechSegmenter.chunkSamples
         var samples: [Float] = []
-        samples.reserveCapacity(16_000 * 60)
+        samples.reserveCapacity(16_000 * 12)
+        // Segmenter ranges use absolute chunk positions. Keep only the audio
+        // that can still belong to an unfinished segment; completed audio is
+        // copied into its transcription task and then discarded here.
+        var sampleBase = 0
         var fed = 0
         var inputFrames: Int64 = 0
         var segmenter = SpeechSegmenter()
         var vadState = await vad.makeStreamState()
         var jobs: [Task<String, Error>] = []
 
-        func startJob(_ chunks: Range<Int>) {
-            let range = SpeechSegmenter.sampleRange(chunks, totalSamples: samples.count)
-            var audio = Array(samples[range])
+        func startJob(_ chunks: Range<Int>) -> Int {
+            let totalSamples = sampleBase + samples.count
+            let range = SpeechSegmenter.sampleRange(chunks, totalSamples: totalSamples)
+            let lower = max(range.lowerBound, sampleBase) - sampleBase
+            let upper = max(lower, range.upperBound - sampleBase)
+            var audio = Array(samples[lower..<upper])
             // Parakeet refuses clips under 0.3 s; pad a short word with silence.
             if audio.count < 16_000 / 2 { audio += [Float](repeating: 0, count: 16_000 / 2 - audio.count) }
             let manager = self.manager
@@ -184,12 +191,21 @@ struct ParakeetLiveTranscriber: Sendable {
                 var state = TdtDecoderState.make()
                 return try await manager.transcribe(audio, decoderState: &state).text
             })
+            return range.upperBound
         }
 
-        func score(_ window: [Float]) async throws {
+        func discardThrough(_ absoluteSample: Int) {
+            let count = min(samples.count, max(0, absoluteSample - sampleBase))
+            guard count > 0 else { return }
+            samples = Array(samples[count...])
+            sampleBase += count
+            fed = max(0, fed - count)
+        }
+
+        func score(_ window: [Float]) async throws -> Range<Int>? {
             let result = try await vad.processStreamingChunk(window, state: vadState)
             vadState = result.state
-            if let cut = segmenter.feed(result.probability) { startJob(cut) }
+            return segmenter.feed(result.probability)
         }
 
         do {
@@ -199,13 +215,17 @@ struct ParakeetLiveTranscriber: Sendable {
                 while samples.count - fed >= chunk {
                     let window = Array(samples[fed..<fed + chunk])
                     fed += chunk
-                    try await score(window)
+                    if let cut = try await score(window) {
+                        discardThrough(startJob(cut))
+                    }
                 }
             }
             if samples.count > fed {
-                try await score(Array(samples[fed...]))
+                if let cut = try await score(Array(samples[fed...])) {
+                    discardThrough(startJob(cut))
+                }
             }
-            if let cut = segmenter.finish() { startJob(cut) }
+            if let cut = segmenter.finish() { _ = startJob(cut) }
 
             var parts: [String] = []
             for job in jobs { parts.append(try await job.value) }

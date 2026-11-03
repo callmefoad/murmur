@@ -67,6 +67,29 @@ commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
 
+### 2026-11-02 — Codex complexity trim
+
+- Files: `Sources/Murmur/JSONFileWriter.swift` (new),
+  `HistoryStore.swift`, `StatsStore.swift`, `MainView.swift` (split),
+  `MainPages.swift` (new), `SettingsPages.swift` (new),
+  `PersonalizationPages.swift` (new), `TrainingPage.swift` (new),
+  `ParakeetEngine.swift`, `README.md`, `PLAN.md`, `.checkpoint.md`.
+- Consolidated duplicated atomic JSON snapshot writing while retaining
+  independent FIFO queues for history and stats. Split SwiftUI pages from the
+  2,376-line view file. Live Parakeet now discards audio after a completed
+  segment has been copied to its transcription task; audio for the active
+  segment remains available to preserve model context. Updated README engine,
+  model-download, privacy, CLI, and lite-build details; marked PLAN notes as
+  historical. Reviewed formatter/rewrite logic but removed no rules because
+  no safe duplication was established.
+- Verification: `swift build --disable-sandbox` completed successfully.
+  `swiftc -frontend -parse Sources/Murmur/*.swift` and `git diff --check`
+  passed. Build still reports the existing WhisperKit non-Sendable warning.
+  XCTest was not run.
+- Commit/push: not yet committed or pushed.
+- Next: run XCTest and compare live Parakeet output on long recordings before
+  treating buffer reclamation as behaviorally verified.
+
 ### 2026-09-29 — Claude Parakeet recognition engine
 
 - Files: `Package.swift`, `Package.resolved`, `Sources/Murmur/ParakeetEngine.swift`

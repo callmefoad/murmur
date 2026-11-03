@@ -8,15 +8,13 @@ transcripts, or other secrets in this file; the GitHub repository is public.
 ## Current state
 
 - Repository: `callmefoad/murmur`; default branch: `main`.
-- Last verified sync: 2026-09-29. Full build and XCTest suite run: 375 tests,
-  0 failures.
+- Last verified sync: 2026-11-02. Latest full build and static Swift parse
+  passed; the XCTest suite was not run for the Nov 2 cleanup changes. The last
+  reported full XCTest run was 387 tests, 0 failures, on 2026-09-29.
 - Repository visibility is public; `main` has no branch protection or rulesets.
-- Latest change clarified that dictation stays on-device while app updates and
-  optional model downloads use the network (`README.md`, `MainView.swift`, and
-  `scripts/make_app.sh`).
-- Verification for that copy change: `MainView.swift` parsed with the installed
-  Xcode Swift compiler and `git diff --check` passed. Full build and XCTest suite
-  were not run in that turn.
+- Latest change simplified persistence, split dashboard pages, reclaimed
+  completed Parakeet segment audio, corrected current architecture docs, and
+  moved the standalone Settings namespace out of AppDelegate.
 
 ## Product decisions to preserve
 
@@ -36,8 +34,8 @@ transcripts, or other secrets in this file; the GitHub repository is public.
 
 ## Open work / known blockers
 
-1. Run a full build and XCTest suite once the active Mac's Xcode license/toolchain
-   gate is resolved. Do not claim the suite passes until it has actually run.
+1. Run the full XCTest suite against the Nov 2 cleanup changes. Do not claim
+   the suite passes until it has actually run.
 2. External tester releases still require a valid Developer ID Application
    identity, Apple notarization credentials, and Keychain approval for Sparkle's
    private signing key. The private key must remain in Keychain, never in this
@@ -66,6 +64,21 @@ a dated handoff entry with exact files changed, verification/results,
 commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
+
+### 2026-11-02 — Codex AppDelegate follow-up
+
+- Files: `Sources/Murmur/AppDelegate.swift`, `Sources/Murmur/Settings.swift`
+  (new), `AI_HANDOFF.md`.
+- Moved the standalone top-level `Settings` namespace into its own file,
+  reducing `AppDelegate.swift` from 1,594 to 1,370 lines without changing
+  access to AppDelegate's private state. Refreshed the handoff summary to
+  distinguish the last full XCTest run from the latest build verification.
+- Verification: `swift build --disable-sandbox` completed successfully;
+  `swiftc -frontend -parse Sources/Murmur/*.swift` and `git diff --check`
+  passed. Existing WhisperKit non-Sendable warning remains. XCTest not run.
+- Commit/push: pending.
+- Next: full XCTest run when requested/available; continue only with a concrete
+  repeated responsibility or proven duplicate, not line count alone.
 
 ### 2026-11-02 — Codex complexity trim
 

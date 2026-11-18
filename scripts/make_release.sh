@@ -22,6 +22,31 @@ DOWNLOAD_PREFIX="${MURMUR_SPARKLE_DOWNLOAD_PREFIX:-https://github.com/callmefoad
 BUILD_NUMBER="${MURMUR_BUILD_NUMBER:-$(git rev-list --count HEAD)}"
 UPDATE_DIR="build/updates"
 
+if [[ "${MURMUR_PUBLISH:-0}" == "1" ]]; then
+    RELEASE_COMMIT=$(git rev-parse HEAD)
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo "ERROR: Publish from a clean checkout so the release tag matches the build." >&2
+        exit 1
+    fi
+    if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+        echo "ERROR: Release tag already exists locally: $RELEASE_TAG" >&2
+        exit 1
+    fi
+    if ! command -v gh >/dev/null; then
+        echo "ERROR: GitHub CLI is required to publish." >&2
+        exit 1
+    fi
+    if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+        echo "ERROR: Release tag already exists on origin: $RELEASE_TAG" >&2
+        exit 1
+    elif [[ "$?" != "2" ]]; then
+        echo "ERROR: Could not verify the release tag on origin." >&2
+        exit 1
+    fi
+    # Require the source commit to be on GitHub before building a release.
+    gh api "repos/{owner}/{repo}/commits/$RELEASE_COMMIT" --silent
+fi
+
 # External testers need a stable Developer ID signer, and their first install
 # must be notarized to pass Gatekeeper. Fail before building or mutating the
 # feed if this machine is not ready to distribute.
@@ -78,14 +103,13 @@ echo "Release archive: $UPDATE_DIR/Murmur-$VERSION.zip"
 echo "Appcast: appcast.xml"
 
 if [ "${MURMUR_PUBLISH:-0}" = "1" ]; then
-    if ! command -v gh >/dev/null 2>&1; then
-        echo "ERROR: GitHub CLI is required when MURMUR_PUBLISH=1." >&2
-        exit 1
-    fi
     RELEASE_NOTES="${MURMUR_RELEASE_NOTES:-Murmur $VERSION}"
-    gh release create "$RELEASE_TAG" \
-        "$UPDATE_DIR/Murmur-$VERSION.zip" \
-        --title "Murmur $VERSION" --notes "$RELEASE_NOTES"
+    RELEASE_ASSETS=("$UPDATE_DIR/Murmur-$VERSION.zip")
+    if [[ -f "$UPDATE_DIR/Murmur-$VERSION.md" ]]; then
+        RELEASE_ASSETS+=("$UPDATE_DIR/Murmur-$VERSION.md")
+    fi
+    gh release create "$RELEASE_TAG" "${RELEASE_ASSETS[@]}" \
+        --target "$RELEASE_COMMIT" --title "Murmur $VERSION" --notes "$RELEASE_NOTES"
     git add appcast.xml
     git commit -m "Publish Murmur $VERSION update feed" -- appcast.xml
     git push origin HEAD:main

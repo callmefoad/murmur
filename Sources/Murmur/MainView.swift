@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 // MARK: - Root
 
 struct MainView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var app: AppDelegate
     @State private var page: Page = .home
     @State private var showSidebar = true
@@ -19,13 +20,22 @@ struct MainView: View {
             if showSidebar {
                 SidebarView(app: app, page: $page, showSidebar: $showSidebar)
                     .frame(width: 232)
+                    .transition(sidebarTransition)
             }
             mainPanel
         }
         .background(Palette.shell)
         .ignoresSafeArea()
         .onReceive(permissionTimer) { _ in app.refreshPermissions() }
-        
+        .animation(sidebarAnimation, value: showSidebar)
+    }
+
+    private var sidebarAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.16)
+    }
+
+    private var sidebarTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity)
     }
 
     private var mainPanel: some View {
@@ -38,6 +48,11 @@ struct MainView: View {
                 topBar
                 ScrollView {
                     pageContent
+                        .id(page)
+                        .transition(.opacity)
+                        .animation(
+                            .easeOut(duration: reduceMotion ? 0.08 : 0.14),
+                            value: page)
                         .padding(.horizontal, 56)
                         .padding(.bottom, 40)
                         .frame(maxWidth: 1100, alignment: .leading)
@@ -52,12 +67,13 @@ struct MainView: View {
         HStack(spacing: 16) {
             if !showSidebar {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { showSidebar = true }
+                    showSidebar = true
                 } label: {
                     Image(systemName: "sidebar.left")
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MurmurPressButtonStyle())
+                .accessibilityLabel("Show sidebar")
                 .padding(.leading, 76)
             }
             Spacer()
@@ -74,13 +90,19 @@ struct MainView: View {
                     .frame(maxWidth: 460, alignment: .trailing)
             }
             RecordingPill(app: app)
-            Image(systemName: "bell")
-                .foregroundStyle(Palette.ink.opacity(0.75))
-                .onTapGesture { page = .help }
-            Image(systemName: "person.circle")
-                .font(.system(size: 18))
-                .foregroundStyle(Palette.ink.opacity(0.75))
-                .onTapGesture { page = .settings }
+            Button { page = .help } label: {
+                Image(systemName: "bell")
+                    .foregroundStyle(Palette.ink.opacity(0.75))
+            }
+            .buttonStyle(MurmurPressButtonStyle())
+            .accessibilityLabel("Help and notifications")
+            Button { page = .settings } label: {
+                Image(systemName: "person.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Palette.ink.opacity(0.75))
+            }
+            .buttonStyle(MurmurPressButtonStyle())
+            .accessibilityLabel("Settings")
         }
         .padding(.top, 18)
         .padding(.horizontal, 24)
@@ -132,6 +154,9 @@ struct RecordingPill: View {
 // MARK: - Sidebar
 
 struct SidebarView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focusedPage: Page?
+    @State private var hoveredPage: Page?
     @ObservedObject var app: AppDelegate
     @Binding var page: Page
     @Binding var showSidebar: Bool
@@ -141,12 +166,13 @@ struct SidebarView: View {
             HStack {
                 Spacer()
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { showSidebar = false }
+                    showSidebar = false
                 } label: {
                     Image(systemName: "sidebar.left")
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MurmurPressButtonStyle())
+                .accessibilityLabel("Hide sidebar")
             }
             .padding(.top, 14)
             .padding(.horizontal, 16)
@@ -196,25 +222,48 @@ struct SidebarView: View {
 
     private func navRow(_ item: Page, compact: Bool = false) -> some View {
         let selected = page == item
-        return HStack(spacing: 10) {
-            Image(systemName: item.icon)
-                .font(.system(size: compact ? 13 : 14))
-                .frame(width: 20)
-            Text(item.label)
-                .font(.system(size: compact ? 13 : 14,
-                              weight: selected ? .medium : .regular))
-            Spacer()
+        return Button {
+            page = item
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.icon)
+                    .font(.system(size: compact ? 13 : 14))
+                    .frame(width: 20)
+                Text(item.label)
+                    .font(.system(size: compact ? 13 : 14,
+                                  weight: selected ? .medium : .regular))
+                Spacer()
+            }
+            .foregroundStyle(Palette.ink.opacity(selected ? 1 : 0.8))
+            .padding(.vertical, compact ? 6 : 9)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(selected
+                        ? Palette.panel
+                        : (hoveredPage == item ? Palette.panel.opacity(0.55) : .clear))
+                    .shadow(color: selected ? .black.opacity(0.06) : .clear,
+                            radius: 2, y: 1))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(focusedPage == item ? Palette.accent : .clear,
+                            lineWidth: 1.5)
+            }
+            .contentShape(Rectangle())
         }
-        .foregroundStyle(Palette.ink.opacity(selected ? 1 : 0.8))
-        .padding(.vertical, compact ? 6 : 9)
-        .padding(.horizontal, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(selected ? Palette.panel : .clear)
-                .shadow(color: selected ? .black.opacity(0.06) : .clear,
-                        radius: 2, y: 1))
-        .contentShape(Rectangle())
-        .onTapGesture { page = item }
+        .buttonStyle(MurmurPressButtonStyle())
+        .accessibilityLabel(item.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .focused($focusedPage, equals: item)
+        .onHover { inside in
+            hoveredPage = inside ? item : (hoveredPage == item ? nil : hoveredPage)
+        }
+        .animation(
+            .easeInOut(duration: reduceMotion ? 0.08 : 0.13),
+            value: selected)
+        .animation(
+            .easeInOut(duration: reduceMotion ? 0.08 : 0.13),
+            value: hoveredPage == item)
     }
 
     private var wordsCard: some View {
@@ -237,7 +286,7 @@ struct SidebarView: View {
                         .padding(.vertical, 8)
                         .background(Palette.ink, in: RoundedRectangle(cornerRadius: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MurmurPressButtonStyle())
             } else {
                 Text("∞ words remaining")
                     .font(.system(size: 14, weight: .semibold))
@@ -252,7 +301,7 @@ struct SidebarView: View {
                         .padding(.vertical, 8)
                         .background(Palette.ink, in: RoundedRectangle(cornerRadius: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MurmurPressButtonStyle())
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

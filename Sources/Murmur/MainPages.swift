@@ -81,7 +81,11 @@ struct HomePage: View {
     // MARK: Banner
 
     private var banner: some View {
-        ZStack(alignment: .leading) {
+        let ready = app.micAuthorized && app.axTrusted
+        let title: LocalizedStringKey = ready
+            ? "Make Murmur sound like \(Text("you").italic())"
+            : "Set up dictation"
+        return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 16)
                 .fill(Palette.banner)
             HStack {
@@ -95,14 +99,16 @@ struct HomePage: View {
                     .padding(.trailing, 40)
             }
             VStack(alignment: .leading, spacing: 10) {
-                Text("Make Murmur sound like \(Text("you").italic())")
+                Text(title)
                     .font(.system(size: 32, design: .serif))
                     .foregroundStyle(.white)
-                Text("Teach it your names, jargon and spellings.")
+                Text(ready
+                     ? "Hold \(app.hotkey.displayName) in any text field to dictate."
+                     : "Enable Microphone and Accessibility to start dictating.")
                     .font(.system(size: 15))
                     .foregroundStyle(.white.opacity(0.85))
-                Button { page = .training } label: {
-                    Text("Start now")
+                Button { page = ready ? .training : .settings } label: {
+                    Text(ready ? "Train your voice" : "Open permission settings")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 22)
@@ -114,7 +120,7 @@ struct HomePage: View {
                                     RoundedRectangle(cornerRadius: 10)
                                         .stroke(.white.opacity(0.35), lineWidth: 1)))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MurmurPressButtonStyle())
                 .padding(.top, 8)
             }
             .padding(.horizontal, 32)

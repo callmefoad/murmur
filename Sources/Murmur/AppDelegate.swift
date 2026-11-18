@@ -826,7 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         hotkeyMonitor.onCancel = { [weak self] in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.uiState == .recording else { return }
                 // `cancel()` finishes the buffer stream, so the streaming task
                 // returns on its own; cancelling it just drops the result.
                 if self.recorder.isStarting {
@@ -922,7 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     private func startRecording() {
-        guard uiState != .recording else { return }
+        guard uiState == .idle else { return }
         forcePolishedForCurrentDictation = polishNextDictation
         isPolishedRecording = polishNextDictation
         polishNextDictation = false
@@ -1051,9 +1051,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     private func stopAndTranscribe() {
+        guard uiState == .recording else { return }
         isPolishedRecording = false
-        hud.hide()
         if recorder.isStarting {
+            hud.hide()
             recorder.cancelPendingStart()
             streamingTask?.cancel()
             streamingTask = nil
@@ -1067,6 +1068,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let quietFallback = streamingFallsBackQuietly
         streamingFallsBackQuietly = false
         guard let url = recorder.stop() else {
+            hud.hide()
             streaming?.cancel()
             recordingStartedAt = nil
             recordingTargetBundleID = nil
@@ -1075,6 +1077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         NSSound(named: "Tink")?.play()
         uiState = .processing
+        hud.showProcessing()
         let duration = recordingStartedAt.map { Date().timeIntervalSince($0) }
         recordingStartedAt = nil
         let targetBundleID = recordingTargetBundleID
@@ -1085,7 +1088,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task { [history] in
             var telemetry = PipelineTelemetry()
             var usedModel = false
-            defer { try? FileManager.default.removeItem(at: url) }
+            var hudMessage: String?
+            defer {
+                hud.finish(message: hudMessage)
+                uiState = .idle
+                try? FileManager.default.removeItem(at: url)
+            }
             do {
                 let raw: String
                 if let streaming {
@@ -1154,7 +1162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                     switch editPlan.outcome {
                     case .discardAll:
                         undoPendingInsertion(reason: "scratch command")
-                        uiState = .idle
                         return
                     case .replaceCurrent(let remainder):
                         formatted = remainder
@@ -1207,6 +1214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                         lastError = "Accessibility isn't active for this build, " +
                             "so the text was copied to your clipboard instead — " +
                             "press ⌘V to paste it. Fix this in Settings."
+                        hudMessage = "Copied. Press ⌘V"
                         NSSound(named: "Basso")?.play()
                     }
                     telemetry.finish("persist+insert")
@@ -1215,15 +1223,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                         usedModel: usedModel, inserted: AXIsProcessTrusted())
                     rebuildMenu()
                 } else {
+                    if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        lastError = "No speech heard. Hold the shortcut and try again."
+                        hudMessage = "No speech heard"
+                    }
                     telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 }
             } catch {
+                hudMessage = "Dictation failed"
                 telemetry.finish("failed")
                 telemetry.commit(wordCount: 0, usedModel: usedModel, inserted: false)
                 lastError = "Transcription failed: \(error.localizedDescription)"
                 NSSound(named: "Basso")?.play()
             }
-            uiState = .idle
         }
     }
 

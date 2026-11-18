@@ -70,7 +70,7 @@ final class HistoryStore {
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do {
                 let data = try Data(contentsOf: fileURL)
-                entries = try JSONDecoder().decode([HistoryEntry].self, from: data)
+                entries = try JSONDecoder().decode(LossyArray<HistoryEntry>.self, from: data).elements
                 // Persist any ids that were just minted for pre-migration entries.
                 save()
             } catch {

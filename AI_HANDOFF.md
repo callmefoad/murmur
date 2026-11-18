@@ -65,6 +65,29 @@ commit/push status, and the next step so the other agent can resume.”
 
 ## Recent handoffs
 
+### 2026-11-08 — Codex native motion polish
+
+- Files: `Sources/Murmur/MainView.swift`, `Sources/Murmur/MainPages.swift`,
+  `Sources/Murmur/UIFoundation.swift`.
+- Added restrained button press feedback, subtle hover/selection feedback,
+  animated page/sidebar transitions, explicit navigation button semantics,
+  accessible labels, selected state, and a visible keyboard focus outline.
+  macOS Reduce Motion removes positional movement and shortens or disables
+  motion feedback. No recording, transcription, permission, or data behavior
+  changed; the HUD still has no live transcript.
+- Verification: `swift build --disable-sandbox` passed and the local app
+  package built, verified, and relaunched. `swiftc -frontend -parse
+  Sources/Murmur/*.swift` and `git diff --check` passed. Visual desktop checks
+  covered normal/reduced motion, page selection, sidebar collapse/show, and
+  repeated interactions. The Reduce Motion preference was restored to off.
+  Accessibility inspection confirmed navigation controls expose button names
+  and selected state; a visible native focus ring was observed on a focused
+  control. Full keyboard traversal of sidebar rows and XCTest were not verified.
+- Commit/push: local changes only; not committed or pushed, as this task
+  authorized local work and explicitly excluded publication.
+- Next: optionally verify sidebar traversal with full keyboard access enabled;
+  otherwise review these local UI changes before deciding whether to share.
+
 ### 2026-11-02 — Codex AppDelegate follow-up
 
 - Files: `Sources/Murmur/AppDelegate.swift`, `Sources/Murmur/Settings.swift`
@@ -293,3 +316,26 @@ commit/push status, and the next step so the other agent can resume.”
   128 ms release-to-text, 0 dropped frames. App rebuilt and relaunched.
 - Next: Taylor tests long dictations live; then idea #1 (learn from fixes)
   or #4 (style per app) from the upgrade list.
+
+### 2026-11-18 — Codex bug hunt
+
+- AppDelegate/DictationHUD: guard recording lifecycle while transcription is
+  in progress, show processing and recovery status in the notch, honor Reduce
+  Motion, and reset the fallback HUD size when moving between displays.
+- MainPages: show a direct permissions action when setup is incomplete and
+  explain the configured shortcut when ready. Includes the prior local motion
+  work in MainView/UIFoundation and the Home button.
+- HistoryStore/StatsStore: salvage valid history entries from mixed JSON and
+  avoid reseeding legacy totals whose seeded marker is missing. Updated the
+  legacy stats test to expect preserved totals.
+- make_release.sh: require a clean, remotely available source commit and a
+  fresh release tag, pin the tag to that commit, and include Markdown notes
+  with the archive.
+- Verification and source push results recorded below. External updater release
+  is blocked: installed signing identities include only WhisperFlow Dev.
+- Debug build, Swift parse, Bash syntax and diff checks passed. Targeted
+  StatsStore and HUD geometry tests passed (17 total, zero failures), and
+  Murmur --selftest exited 0. Existing WhisperKit Sendable warnings remain.
+  No live microphone, UI, or Sparkle update smoke test was performed.
+- Source shipment target: origin/main. The commit containing this entry is
+  the release candidate. Verify origin/main before distributing binaries.

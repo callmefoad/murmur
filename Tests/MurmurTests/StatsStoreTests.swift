@@ -94,7 +94,7 @@ final class StatsStoreTests: XCTestCase {
     /// A payload missing several fields entirely (not just `dailyWords`)
     /// must still decode via the `decodeIfPresent(...) ?? default` pattern
     /// rather than throwing `keyNotFound`.
-    func testDecodingPayloadMissingManyFieldsFallsBackToDefaults() throws {
+    func testLegacyTotalsPreventReseedingWhenOtherFieldsAreMissing() throws {
         let json = """
         { "words": 500 }
         """
@@ -105,7 +105,7 @@ final class StatsStoreTests: XCTestCase {
         XCTAssertEqual(decoded.timedWords, 0)
         XCTAssertEqual(decoded.timedSeconds, 0.0)
         XCTAssertTrue(decoded.dailyWords.isEmpty)
-        XCTAssertFalse(decoded.seeded)
+        XCTAssertTrue(decoded.seeded)
     }
 
     /// Decoding empty JSON `{}` must not throw either — the most extreme

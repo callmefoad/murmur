@@ -63,7 +63,9 @@ struct LifetimeStats: Codable {
                 Set<String>.self, forKey: .activeDays) ?? []
             dailyWords = Dictionary(uniqueKeysWithValues: oldActiveDays.map { ($0, 0) })
         }
-        seeded = try container.decodeIfPresent(Bool.self, forKey: .seeded) ?? false
+        seeded = try container.decodeIfPresent(Bool.self, forKey: .seeded)
+            ?? (dictations > 0 || words > 0 || timedWords > 0 || timedSeconds > 0
+                || dailyWords.values.contains { $0 > 0 })
         pruneOldDays()
     }
 

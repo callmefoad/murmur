@@ -43,6 +43,21 @@ extension View {
     }
 }
 
+/// Small press feedback for frequently used controls. Reduced Motion keeps a
+/// brief opacity cue but removes the scale change.
+struct MurmurPressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.12),
+                value: configuration.isPressed)
+    }
+}
+
 enum Page: Hashable {
     case home, insights, dictionary, training, snippets, myVoice, style
     case transforms, scratchpad, settings, help

@@ -4,6 +4,7 @@ import SwiftUI
 /// Model driving the dictation HUD's SwiftUI content.
 private final class HUDModel: ObservableObject {
     @Published var level: Float = 0
+    @Published var status: String?
     /// True on notched displays: the HUD renders as a solid-black strip
     /// fused to the notch bezel instead of a floating capsule.
     @Published var notchMode = false
@@ -15,8 +16,7 @@ private final class HUDModel: ObservableObject {
 /// Caps-lock-style floating indicator shown while dictating: a live input
 /// meter without a transcript preview.
 ///
-/// Lifecycle: `show()` on dictation start, `update(level:)` while running,
-/// `hide()` on stop, cancel, or failure.
+/// Shows the input meter while recording, then status until processing ends.
 /// The panel floats above everything (including full-screen spaces), never
 /// takes key focus, and ignores all mouse events. It sits top-centre on the
 /// pointer's screen: tucked just below the camera housing ("notch") on
@@ -36,15 +36,22 @@ final class DictationHUD {
     /// to the main screen), top-centred per `DictationHUDLayout`.
     func show() {
         model.level = 0
+        model.status = nil
         let screen = currentScreen()
         let inset = screen?.safeAreaInsets.top ?? 0
         model.notchMode = DictationHUDLayout.isNotched(topSafeInset: inset)
         model.notchInset = model.notchMode ? inset : 0
         let hud = makePanelIfNeeded()
-        guard let final = frame(for: hud, on: screen) else { return }
+        guard let final = frame(on: screen) else { return }
         // Bump the token so a still-running hide's completion handler can't
         // orderOut the panel we are about to re-show.
         appearanceToken += 1
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            hud.alphaValue = 1
+            hud.setFrame(final, display: true)
+            hud.orderFrontRegardless()
+            return
+        }
         hud.alphaValue = 0
         hud.setFrame(final.offsetBy(dx: 0, dy: Self.slideDistance), display: false)
         hud.orderFrontRegardless()
@@ -53,6 +60,25 @@ final class DictationHUD {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             hud.animator().setFrame(final, display: true)
             hud.animator().alphaValue = 1
+        }
+    }
+
+    func showProcessing() {
+        model.status = "Transcribing…"
+    }
+
+    func finish(message: String?) {
+        guard let message else {
+            hide()
+            return
+        }
+        guard panel?.isVisible == true else { return }
+        model.status = message
+        let token = appearanceToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard token == appearanceToken else { return }
+            hide()
         }
     }
 
@@ -70,6 +96,10 @@ final class DictationHUD {
         guard let hud = panel, hud.isVisible else { return }
         appearanceToken += 1
         let token = appearanceToken
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            hud.orderOut(nil)
+            return
+        }
         let retreat = hud.frame.offsetBy(dx: 0, dy: Self.slideDistance)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.16
@@ -124,15 +154,15 @@ final class DictationHUD {
         } ?? NSScreen.main
     }
 
-    private func frame(for panel: NSPanel, on screen: NSScreen?) -> CGRect? {
+    private func frame(on screen: NSScreen?) -> CGRect? {
         guard let screen else { return nil }
         let inset = screen.safeAreaInsets.top
-        var size = panel.frame.size
+        var size = CGSize(width: 220, height: 64)
         if DictationHUDLayout.isNotched(topSafeInset: inset) {
             // Match the actual notch width for the current display mode and
             // cover exactly the notch depth plus the 39-point menu bar row.
             size.width = DictationHUDLayout.notchWidth(
-                screen: screen, fallback: panel.frame.width)
+                screen: screen, fallback: size.width)
             size.height = inset + Self.notchHangHeight
         }
         let origin = DictationHUDLayout.hudOrigin(
@@ -218,17 +248,27 @@ private struct DictationHUDContent: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Palette.accent)
-            WaveformBars(level: model.level)
+            if let status = model.status {
+                Text(status)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .frame(height: 28)
+            } else {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                    .accessibilityLabel("Recording")
+                WaveformBars(level: model.level)
+                    .accessibilityHidden(true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 20)
         // Notch mode pads down past the camera housing; fallback keeps the
         // old capsule proportions.
         .padding(.top, model.notchMode ? model.notchInset : 14)
-        .padding(.bottom, model.notchMode ? 13 : 14)
+        .padding(.bottom, model.notchMode ? 11 : 14)
         .background {
             if model.notchMode {
                 // Pure black with square top corners so the strip is visually
@@ -250,6 +290,7 @@ private struct DictationHUDContent: View {
 }
 
 private struct WaveformBars: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let level: Float
 
     /// Per-bar sensitivity so the meter looks organic even on steady input.
@@ -266,7 +307,7 @@ private struct WaveformBars: View {
         // Fixed to the tallest bar so the meter never changes the layout
         // around it; bars grow and shrink from the middle of this box.
         .frame(height: 28)
-        .animation(.linear(duration: 0.09), value: level)
+        .animation(reduceMotion ? nil : .linear(duration: 0.09), value: level)
     }
 
     private func barHeight(_ weight: Float) -> CGFloat {
